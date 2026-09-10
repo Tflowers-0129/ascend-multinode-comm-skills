@@ -75,6 +75,8 @@ python scripts/hccl_bench.py "${HCCL_HOST_ARGS[@]}" \
 
 ## MC2 不是 AllReduce 的另一个名字
 
-MC2 需要在目标版本中测试真实融合算子，例如矩阵乘与通信融合、专家分发/合并等路径；不同平台、形状、图模式和通信资源 API 约束不同。当前库提供 `require_mc2` 和适配器契约，没有声称内置一个跨所有 CANN 版本通用的 MC2 runner。
+MC2 需要在目标版本中测试真实融合算子，不同平台、形状、图模式和通信资源 API 约束不同。现在提供 `require_mc2` + `mc2_cases` 的逐算子执行和验收：内置 Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter 三类真实 API 的非量化 eager 小探针；AllToAll 融合、MoE Dispatch/Combine、Fused MoE、量化与图模式走版本化适配器。没有声称跨所有 CANN/A5 版本通用。
+
+完整的算子分类、现场识别、配置模板、MoE 配对校验和故障阶段见 [MC2 算子级检测指南](mc2-testing.md)。不要在完成本页普通 hccl_test 后就停止；应根据部署实际使用的 MC2 路径继续验证。`primitives` 与 `mc2` 是不同放行范围，未测项保持未验证。
 
 验收必须包含：实际融合算子已执行、跨节点而非仅本地卡、逐元素与参考结果比较、对应 rank/device/shape/dtype、同步完成、同版本 eager/图模式必要覆盖。普通 allreduce/alltoall/aiv 成功不能把 mc2 填 PASS。适配器失败要输出算子名、rank、资源初始化阶段和异常码，外层 watchdog 限时回收。

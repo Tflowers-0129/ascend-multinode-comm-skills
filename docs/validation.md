@@ -16,8 +16,8 @@ GitHub Actions 的 Linux/Windows × Python 3.10/3.12 标准库测试已通过，
 
 - 仅 IPv4；物理/逻辑卡映射人工确认。没有自动从任意服务 launch shell 解析所有 TP/EP/PP/DP 域。
 - 拓扑自动发现到设备/配置证据；物理 fullmesh 的还原需要平台邻接表与版本适配。
-- 默认小 collective，未覆盖 PP P2P、全部 dtype/消息尺寸、图捕获/MC2。
-- KV/MC2 提供验收接口与中文实施步骤，尚无跨现场版本的内置实现；缺失时严格未验证。
+- 默认小 collective，未覆盖 PP P2P、全部 dtype/消息尺寸和图捕获；后续 MC2 算子扩展见下文，仍未上板验收。
+- KV 与复杂 MC2 路径提供验收接口与中文实施步骤，尚无跨现场版本的通用内置实现；缺失时严格未验证。
 - hccl_test 退出零只表示程序完成，校验表需要匹配版本解释，包装器不会伪报正确性 PASS。
 - 工具不自动消除用户服务占卡、版本冲突、代理和拓扑挂载警告；这些要在现场验收流程逐项确认。
 
@@ -54,6 +54,16 @@ README、技能描述、场景路由和远端连接模板均提供“启动前�
 使用说明改为按所用 agent 的技能加载、文件读取、SSH/服务器连接和命令执行能力接入，Codex 安装路径仅保留为可选示例，CLI 可独立运行。没有远端访问能力时明确报告限制，不把本地分析冒充现场检查。
 
 本次仅修改技能与文档，不改变探针代码。本地既有 65 项 unittest、技能格式和相对资源链接检查通过；人工核对两条入口的前提、授权范围与未测项处理。没有执行实际 agent 产品接入测试、SSH/容器端到端测试或 NPU 打流，不能据此宣称任意 agent 已兼容或现场已验收。
+
+## 新增：MC2 逐算子探针与验收
+
+不再只有泛化 MC2 适配器接口。preflight.py 新增三类真实 torch_npu 融合 API 调用入口：Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter，范围限定为版本支持的非量化 eager 小形状。MC2 case 独立生成通信组，记录 capability、TCPStore、HCCL 初始化、通信 handle、融合调用、设备同步、逐元素校验与重复执行阶段。普通 collective 不能代替被测融合调用。
+
+mc2_cases 支持逐算子 builtin 或远端协调器 adapter；AllToAll 融合、MoE Dispatch/Combine、Fused MoE/MegaMoE、量化和图模式有明确的版本化测试指引，但本次没有伪造通用实现。每个 case 单独保留结果，新增 mc2 放行范围；case 失败后停止并保留后续未测项，不能被另一 case 的 PASS 覆盖。
+
+新增 18 项主机侧回归，总计 83 项本地 unittest 通过。覆盖显式执行授权开关、支持来源占位符拒绝、形状/整除/工作量/容差校验、输入随 rank/轮次变化、CPU 数学替身验证 gather/归约/切分语义、真实融合 API 调用选择（mock）、NaN/Inf/输出错配拒绝、完整多节点 rank 编排、同宿主拒绝、适配器 request/逐 rank 证据与非零退出、阶段异常、逐 case 不误放行及 service 仍需模型请求。技能格式与相对链接亦检查通过。
+
+没有安装或运行真实 torch/torch_npu，也没有连接真实 SSH/Docker/NPU。数学替身与 mock 仅验证主机侧逻辑，不等于 PyTorch CPU 集成测试或 A5 硬件通过。公开 API 文档的 A2/A3 支持不能外推为所有 A5/CANN 组合；必须由 agent 核实目标版本并现场验收，报告继续列明未测项。
 
 ## 上板验收建议
 

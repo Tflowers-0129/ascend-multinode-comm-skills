@@ -1,0 +1,44 @@
+{
+  "require_mc2": true,
+  "mc2_cases": [
+    {
+      "name": "tp-matmul-allreduce-eager",
+      "group": "model-domain",
+      "operator": "matmul_all_reduce",
+      "runner": "builtin",
+      "support_ref": "REPLACE_WITH_VERIFIED_TARGET_VERSION_API_AND_TOPOLOGY_SUPPORT",
+      "execution_mode": "eager",
+      "shape": [128, 512, 128],
+      "dtype": "float16",
+      "repeats": 2,
+      "rtol": 0.02,
+      "atol": 0.02
+    },
+    {
+      "name": "tp-allgather-matmul-eager",
+      "group": "model-domain",
+      "operator": "all_gather_matmul",
+      "runner": "builtin",
+      "support_ref": "REPLACE_WITH_VERIFIED_TARGET_VERSION_API_AND_TOPOLOGY_SUPPORT",
+      "execution_mode": "eager",
+      "shape": [128, 512, 128],
+      "dtype": "float16",
+      "repeats": 2,
+      "rtol": 0.02,
+      "atol": 0.02
+    },
+    {
+      "name": "tp-matmul-reducescatter-eager",
+      "group": "model-domain",
+      "operator": "matmul_reduce_scatter",
+      "runner": "builtin",
+      "support_ref": "REPLACE_WITH_VERIFIED_TARGET_VERSION_API_AND_TOPOLOGY_SUPPORT",
+      "execution_mode": "eager",
+      "shape": [128, 512, 128],
+      "dtype": "float16",
+      "repeats": 2,
+      "rtol": 0.02,
+      "atol": 0.02
+    }
+  ]
+}

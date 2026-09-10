@@ -6,6 +6,7 @@ import concurrent.futures
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -25,6 +26,9 @@ PREFIX = "A5COMM "
 SOURCE = globals().get("SOURCE") or Path(__file__).read_text(encoding="utf-8")
 BOOT = "import sys;SOURCE=sys.stdin.buffer.read().decode('utf-8');exec(compile(SOURCE,'<a5-preflight>','exec'))"
 STAGES = {"tcpstore", "gloo", "hccl"}
+MC2_APIS = {"matmul_all_reduce": "npu_mm_all_reduce_base",
+            "all_gather_matmul": "npu_all_gather_base_mm",
+            "matmul_reduce_scatter": "npu_mm_reduce_scatter_base"}
 ENV_KEYS = {"HCCL_IF_IP", "HCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME", "HCCL_ALGO",
             "HCCL_IF_BASE_PORT", "HCCL_HOST_SOCKET_PORT_RANGE", "ASCEND_RT_VISIBLE_DEVICES",
             "ASCEND_VISIBLE_DEVICES", "PYTHONHASHSEED", "HCCL_CONNECT_TIMEOUT",
@@ -356,9 +360,167 @@ def collective(payload):
         dist.destroy_process_group()
 
 
+def mc2_inputs(torch, case, rank, repeat):
+    """固定种子、逐 rank 不同的 CPU 输入；先转目标 dtype，再用于设备与 golden。"""
+    m, k, n = case["shape"]
+    gen = torch.Generator(device="cpu").manual_seed(1709 + rank * 1009 + repeat * 65537)
+    dtype = getattr(torch, case["dtype"])
+    x = (torch.randint(-8, 9, (m, k), generator=gen).float() / 8).to(dtype)
+    w = (torch.randint(-8, 9, (k, n), generator=gen).float() / 16).to(dtype)
+    return x, w
+
+
+def mc2_reference(torch, case, rank, world, repeat):
+    """独立 CPU FP32 golden，不调用被测融合算子或跨卡 collective。"""
+    op = case["operator"]
+    if op == "all_gather_matmul":
+        gathered = torch.cat([mc2_inputs(torch, case, r, repeat)[0] for r in range(world)])
+        weight = mc2_inputs(torch, case, rank, repeat)[1]
+        return gathered.float() @ weight.float(), gathered
+    result = None
+    for peer in range(world):
+        x, w = mc2_inputs(torch, case, peer, repeat)
+        partial = x.float() @ w.float()
+        result = partial if result is None else result + partial
+    if op == "matmul_reduce_scatter":
+        result = result.chunk(world, dim=0)[rank]
+    return result, None
+
+
+def mc2_invoke(torch_npu, case, x, w, hcom, world):
+    """仅调用真实融合 API；没有拆成 matmul + collective 的替代分支。"""
+    fn = getattr(torch_npu, MC2_APIS[case["operator"]])
+    kwargs = {"comm_mode": case["comm_mode"]} if "comm_mode" in case else {}
+    if case["operator"] == "matmul_all_reduce":
+        return fn(x, w, hcom, reduce_op="sum"), None
+    if case["operator"] == "all_gather_matmul":
+        return fn(x, w, hcom, world, gather_output=True, **kwargs)
+    return fn(x, w, hcom, world, reduce_op="sum", **kwargs), None
+
+
+def mc2_tensor_check(torch, actual, expected, dtype, rtol, atol):
+    if tuple(actual.shape) != tuple(expected.shape) or actual.dtype != dtype:
+        raise ValueError("MC2 输出 shape/dtype 与合同不符")
+    actual = actual.detach().cpu().float()
+    expected = expected.float()
+    if not bool(torch.isfinite(actual).all().item()) or not bool(torch.isfinite(expected).all().item()):
+        raise ValueError("MC2 输出或 golden 含 NaN/Inf")
+    error = float((actual - expected).abs().max().item())
+    if not torch.allclose(actual, expected, rtol=rtol, atol=atol):
+        raise ValueError("MC2 数值校验失败 max_abs_error=" + str(error))
+    return error
+
+
+def mc2_worker(payload):
+    from datetime import timedelta
+    case, rank, world = payload["case"], payload["rank"], payload["world"]
+    context = dict(case=case["name"], operator=case["operator"], rank=rank,
+                   node=payload["node"], device=payload["device"])
+    phase = "import"
+    initialized = False
+    try:
+        import torch
+        import torch_npu
+        import torch.distributed as dist
+        phase = "capability"
+        emit("phase", phase=phase, **context)
+        if not callable(getattr(torch_npu, MC2_APIS[case["operator"]], None)):
+            raise RuntimeError("当前 torch_npu 缺少真实融合 API；不是网络故障，不回退到普通 collective")
+        if payload["device"] >= torch.npu.device_count():
+            raise ValueError("MC2 逻辑卡超出当前容器可见卡范围")
+        torch.set_num_threads(1)  # 限制每个测试 rank 的 CPU golden 线程，避免占满宿主 CPU。
+        torch.npu.set_device(payload["device"])
+        device = "npu:" + str(payload["device"])
+        phase = "tcpstore"
+        emit("phase", phase=phase, **context)
+        timeout = timedelta(seconds=payload["timeout_s"])
+        store = dist.TCPStore(payload["master"], payload["port"], world, rank == 0, timeout,
+                              wait_for_workers=True, use_libuv=payload.get("use_libuv", True))
+        boot_id = read_small("/proc/sys/kernel/random/boot_id")
+        if not boot_id:
+            raise RuntimeError("无法取得 kernel boot_id，跨宿主证据未验证")
+        host_id = hashlib.sha256(boot_id.encode()).hexdigest()
+        store.set("mc2-host/" + str(rank), host_id)
+        store.wait(["mc2-host/" + str(r) for r in range(world)], timeout)
+        if len({store.get("mc2-host/" + str(r)) for r in range(world)}) < 2:
+            raise ValueError("MC2 测试没有跨不同宿主，不能验收跨机通信")
+        phase = "hccl_init"
+        emit("phase", phase=phase, **context)
+        dist.init_process_group("hccl", store=store, rank=rank, world_size=world, timeout=timeout)
+        initialized = True
+        phase = "comm_handle"
+        emit("phase", phase=phase, **context)
+        from torch.distributed.distributed_c10d import _get_default_group
+        pg = _get_default_group()
+        backend = pg._get_backend(torch.device("npu")) if hasattr(pg, "_get_backend") else pg
+        hcom = backend.get_hccl_comm_name(rank)
+        measurements = []
+        with torch.no_grad():
+            for repeat in range(case["repeats"]):
+                phase = "prepare_and_reference"
+                emit("phase", phase=phase, repeat=repeat, **context)
+                cpu_x, cpu_w = mc2_inputs(torch, case, rank, repeat)
+                expected, gather_expected = mc2_reference(torch, case, rank, world, repeat)
+                x, w = cpu_x.to(device), cpu_w.to(device)
+                torch.npu.synchronize()
+                phase = "fused_launch"
+                emit("phase", phase=phase, repeat=repeat, **context)
+                out, gathered = mc2_invoke(torch_npu, case, x, w, hcom, world)
+                phase = "device_synchronize"
+                emit("phase", phase=phase, repeat=repeat, **context)
+                torch.npu.synchronize()
+                phase = "numerical_check"
+                err = mc2_tensor_check(torch, out, expected, x.dtype, case["rtol"], case["atol"])
+                if gather_expected is not None:
+                    mc2_tensor_check(torch, gathered, gather_expected, x.dtype, 0, 0)
+                measurements.append(dict(repeat=repeat, max_abs_error=err))
+                emit("phase", phase="mc2_checked", repeat=repeat, max_abs_error=err, **context)
+                del x, w, out, gathered, expected, gather_expected
+        phase = "completion_barrier"
+        dist.barrier()
+        torch.npu.synchronize()
+        return dict(context, status="PASS", api=MC2_APIS[case["operator"]],
+                    host_id=host_id, world_size=world, shape=case["shape"], dtype=case["dtype"],
+                    execution_mode="eager", measurements=measurements,
+                    versions={"torch": torch.__version__, "torch_npu": getattr(torch_npu, "__version__", "unknown")},
+                    scope="仅本算子 eager 非量化小形状；不覆盖 MoE、图模式或其他融合变体")
+    except Exception as exc:
+        emit("mc2_failure", phase=phase, error=type(exc).__name__ + ": " + str(exc), **context)
+        raise
+    finally:
+        if initialized:
+            dist.destroy_process_group()
+
+
+def validate_mc2_evidence(evidence, request):
+    """验证适配器覆盖了本 case 全部 rank，而非一个含糊的 MC2 PASS。"""
+    detail = evidence.get("evidence", {})
+    for key in ("case", "operator", "group", "execution_mode"):
+        if detail.get(key) != request[key]:
+            raise ValueError("MC2 适配器证据不匹配：" + key)
+    ranks = detail.get("ranks", [])
+    expected = request["ranks"]
+    if not isinstance(ranks, list) or len(ranks) != len(expected):
+        raise ValueError("MC2 缺少完整 rank 证据")
+    for want in expected:
+        matches = [r for r in ranks if isinstance(r, dict) and r.get("rank") == want["rank"]]
+        if len(matches) != 1 or any(matches[0].get(k) != v for k, v in want.items()):
+            raise ValueError("MC2 rank/node/device 映射不匹配")
+        row = matches[0]
+        if row.get("status") != "PASS" or row.get("synchronized") is not True or row.get("numerical_correctness") is not True:
+            raise ValueError("MC2 rank 未同步完成或未通过数值校验")
+    if type(detail.get("repeats")) is not int or detail["repeats"] < request["repeats"]:
+        raise ValueError("MC2 未覆盖请求的重复次数")
+    if not detail.get("versions") or not detail.get("parameters"):
+        raise ValueError("MC2 缺少版本或 shape/dtype/路由等测试参数")
+
+
 def adapter(payload):
     """适配器 argv 只来自用户配置，不来自日志或远端返回内容。"""
-    p = subprocess.Popen(payload["argv"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    env = dict(os.environ)
+    if "mc2_request" in payload:
+        env["A5_MC2_REQUEST"] = json.dumps(payload["mc2_request"])
+    p = subprocess.Popen(payload["argv"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
                          text=True, encoding="utf-8", errors="replace")
     output, _ = p.communicate()
     if p.returncode != 0:
@@ -369,6 +531,8 @@ def adapter(payload):
     evidence = json.loads(lines[-1])
     if evidence.get("status") != "PASS" or any(evidence.get("checks", {}).get(k) is not True for k in payload["required_checks"]):
         raise ValueError("适配器缺少必要验收项：" + json.dumps(evidence))
+    if "mc2_request" in payload:
+        validate_mc2_evidence(evidence, payload["mc2_request"])
     return evidence
 
 
@@ -411,7 +575,7 @@ def agent(payload):
     if not payload.get("supervised"):
         return supervised(payload)
     functions = {"inventory": inventory, "dns": dns_probe, "serve": serve,
-                 "dial": dial, "collective": collective, "adapter": adapter}
+                 "dial": dial, "collective": collective, "mc2": mc2_worker, "adapter": adapter}
     result = functions[payload["action"]](payload)
     emit("result", action=payload["action"], result=result)
 
@@ -472,7 +636,66 @@ def validate_config(cfg):
             raise ValueError("未支持的环境变量：" + key)
     if any(k in cfg.get("environment", {}) for k in ("HCCL_IF_IP", "HCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME")):
         raise ValueError("网卡/IP 由探测结果逐节点设置，不允许全局硬编码")
+    validate_mc2_cases(cfg)
     return cfg
+
+
+def validate_mc2_cases(cfg):
+    cases = cfg.get("mc2_cases", [])
+    if not isinstance(cases, list) or len(cases) > 64:
+        raise ValueError("mc2_cases 必须为至多 64 项的列表")
+    if cases and cfg.get("require_mc2") is not True:
+        raise ValueError("配置 mc2_cases 时须显式设置 require_mc2=true")
+    if cases and any(a.get("stage") == "mc2" for a in cfg.get("adapters", [])):
+        raise ValueError("mc2_cases 不与旧式 stage=mc2 适配器混用，避免覆盖证据")
+    seen = set()
+    for case in cases:
+        if not isinstance(case, dict) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", case.get("name", "")):
+            raise ValueError("MC2 case 需要唯一 name（字母/数字/下划线/连字符）")
+        if case["name"] in seen:
+            raise ValueError("MC2 case 名称重复")
+        seen.add(case["name"])
+        group = next((g for g in cfg["groups"] if g["name"] == case.get("group")), None)
+        if group is None or len(group["nodes"]) < 2:
+            raise ValueError("MC2 case 必须选择至少两个节点的实际通信域")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", case.get("operator", "")):
+            raise ValueError("MC2 operator 标识无效")
+        if not isinstance(case.get("support_ref"), str) or not case["support_ref"].strip() or "REPLACE" in case["support_ref"]:
+            raise ValueError("MC2 support_ref 需填写已核对的现场版本/API/组网约束来源")
+        if type(case.get("repeats")) is not int or not 2 <= case["repeats"] <= 100:
+            raise ValueError("MC2 repeats 必须为 2~100，至少验证连续两次执行")
+        if case.get("execution_mode") not in {"eager", "graph"}:
+            raise ValueError("MC2 execution_mode 必须明确 eager 或 graph")
+        if case.get("runner") == "builtin":
+            if case["operator"] not in MC2_APIS or case["execution_mode"] != "eager":
+                raise ValueError("内置 MC2 仅支持三类非量化 eager 融合 API；其他路径使用版本化适配器")
+            shape = case.get("shape")
+            if not isinstance(shape, list) or len(shape) != 3 or any(type(x) is not int or not 1 <= x <= 4096 for x in shape):
+                raise ValueError("MC2 shape 必须为 [m,k,n]，每维 1~4096")
+            m, k, n = shape
+            world = sum(len(x["devices"]) for x in cfg["nodes"] if x["name"] in group["nodes"])
+            if k < 256 or k % 32 or n % 32:
+                raise ValueError("内置 MC2 小探针要求 k>=256 且 k/n 为 32 的倍数，非完整算子支持域")
+            if case["operator"] == "matmul_reduce_scatter" and m % world:
+                raise ValueError("MatmulReduceScatter 的输入 m 必须整除 world_size")
+            if world * m * k * n > 500_000_000:
+                raise ValueError("MC2 CPU golden 工作量过大，请缩小形状或使用专用适配器")
+            if case.get("dtype") not in {"float16", "bfloat16"}:
+                raise ValueError("内置 MC2 仅支持 float16/bfloat16")
+            for key in ("rtol", "atol"):
+                value = case.get(key)
+                if type(value) not in (float, int) or not math.isfinite(value) or not 0 <= value <= .1:
+                    raise ValueError("MC2 rtol/atol 需显式为有限的 0~0.1；不能用无限容差放行")
+            if "comm_mode" in case and (case["comm_mode"] not in {"aiv", "ai_cpu"} or case["operator"] == "matmul_all_reduce"):
+                raise ValueError("comm_mode 仅适用于已核对该参数的 AllGatherMatmul/MatmulReduceScatter")
+        elif case.get("runner") == "adapter":
+            if case.get("node") not in group["nodes"]:
+                raise ValueError("MC2 adapter 发起节点必须属于该通信域")
+            argv = case.get("argv")
+            if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\x00" in a for a in argv):
+                raise ValueError("MC2 adapter 需明确 argv，不从现场日志生成执行命令")
+        else:
+            raise ValueError("MC2 runner 必须明确 builtin 或 adapter")
 
 
 def remote_argv(node, payload, env):
@@ -583,7 +806,12 @@ def tcp_matrix(nodes, selected, cfg):
             stop_owned(s.p)
 
 
-def run_group(nodes, selected, cfg, stage):
+def mc2_rank_map(nodes):
+    return [dict(rank=i, node=node, device=dev) for i, (node, dev) in enumerate(
+        (n["name"], d) for n in nodes for d in n["devices"])]
+
+
+def run_group(nodes, selected, cfg, stage, case=None):
     total = sum(len(n["devices"]) for n in nodes)
     rank = 0
     jobs = []
@@ -594,6 +822,8 @@ def run_group(nodes, selected, cfg, stage):
             workers.append(dict(action="collective", stage=stage, rank=rank, world=total, device=dev,
                                 master=master, port=cfg["master_port"], timeout_s=cfg["timeout_s"],
                                 use_libuv=cfg.get("use_libuv", True)))
+            if case is not None:
+                workers[-1].update(action="mc2", case=case, node=n["name"])
             rank += 1
         ip = selected[n["name"]]
         env = dict(cfg.get("environment", {}), HCCL_IF_IP=ip["ip"], HCCL_SOCKET_IFNAME="=" + ip["nic"],
@@ -601,8 +831,24 @@ def run_group(nodes, selected, cfg, stage):
         jobs.append((n, dict(workers=workers, timeout_s=cfg["timeout_s"]), env))
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(nodes)) as ex:
         outcomes = list(ex.map(lambda j: call_remote(*j), jobs))
-    return {"status": "PASS" if all(x["status"] == "PASS" for x in outcomes) else "FAIL",
-            "world_size": total, "nodes": {n["name"]: r for n, r in zip(nodes, outcomes)}}
+    result = {"status": "PASS" if all(x["status"] == "PASS" for x in outcomes) else "FAIL",
+              "world_size": total, "nodes": {n["name"]: r for n, r in zip(nodes, outcomes)}}
+    if case is not None and result["status"] == "PASS":
+        records = [e["result"] for out in outcomes for e in out["events"]
+                   if e.get("event") == "result" and e.get("action") == "mc2"]
+        expected = mc2_rank_map(nodes)
+        good = len(records) == total and len({r.get("host_id") for r in records if r.get("host_id")}) >= 2
+        for want in expected:
+            matches = [r for r in records if r.get("rank") == want["rank"]]
+            good = good and len(matches) == 1
+            if len(matches) == 1:
+                row = matches[0]
+                good = good and all(row.get(k) == v for k, v in want.items())
+                good = good and row.get("status") == "PASS" and row.get("operator") == case["operator"]
+                good = good and row.get("case") == case["name"] and len(row.get("measurements", [])) == case["repeats"]
+        if not good:
+            result.update(status="FAIL", error="MC2 缺少完整逐 rank/重复执行/跨宿主验收证据")
+    return result
 
 
 def gate(report, scope, max_age=3600):
@@ -635,6 +881,13 @@ def run(config, command):
         extra.append("mc2")
     for key in extra:
         checks[key] = {"status": "UNVERIFIED", "reason": "需真实版本适配器与验收证据"}
+    mc2_keys = ["mc2/" + c["name"] for c in cfg.get("mc2_cases", [])]
+    if cfg.get("require_mc2"):
+        for key in mc2_keys:
+            checks[key] = {"status": "UNVERIFIED"}
+        if mc2_keys:
+            report["required"]["mc2"] = list(service_required) + ["mc2"] + mc2_keys
+        service_required += mc2_keys
     report["required"]["service"] = service_required + extra
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(nodes)) as ex:
@@ -694,6 +947,25 @@ def run(config, command):
                     checks[g["name"] + "/" + stage] = run_group(groupnodes, selected, cfg, stage)
                     if checks[g["name"] + "/" + stage]["status"] == "FAIL":
                         return report
+        for case in cfg.get("mc2_cases", []):
+            group = next(g for g in cfg["groups"] if g["name"] == case["group"])
+            groupnodes = [next(n for n in nodes if n["name"] == name) for name in group["nodes"]]
+            key = "mc2/" + case["name"]
+            if case["runner"] == "builtin":
+                checks[key] = run_group(groupnodes, selected, cfg, "mc2", case=case)
+            else:
+                request = dict(case=case["name"], operator=case["operator"], group=case["group"],
+                               execution_mode=case["execution_mode"], repeats=case["repeats"],
+                               ranks=mc2_rank_map(groupnodes))
+                node = next(n for n in groupnodes if n["name"] == case["node"])
+                checks[key] = call_remote(node, dict(action="adapter", argv=case["argv"], mc2_request=request,
+                    required_checks=["fused_operator", "numerical_correctness", "cross_node"], timeout_s=cfg["timeout_s"]))
+            checks[key]["case_config"] = {k: v for k, v in case.items() if k != "argv"}
+            checks["mc2"] = {"status": "FAIL" if any(checks[k]["status"] == "FAIL" for k in mc2_keys)
+                             else "PASS" if all(checks[k]["status"] == "PASS" for k in mc2_keys) else "UNVERIFIED",
+                             "cases": mc2_keys, "scope": "仅显式列出的算子、通信域与执行模式"}
+            if checks[key]["status"] != "PASS":
+                return report
         contract = {"mc2": ["fused_operator", "numerical_correctness", "cross_node"],
                     "kv_transfer": ["metadata", "remote_kv", "checksum", "release"],
                     "kv_pool": ["register", "put", "remote_get", "checksum", "cache_hit", "cleanup"],
@@ -730,7 +1002,7 @@ def main():
         s.add_argument("--out", required=True)
     s = sub.add_parser("gate")
     s.add_argument("--report", required=True)
-    s.add_argument("--scope", choices=["primitives", "service", "pairs"], required=True)
+    s.add_argument("--scope", choices=["primitives", "service", "pairs", "mc2"], required=True)
     s.add_argument("--max-age-s", type=int, default=3600)
     args = p.parse_args()
     if args.command == "gate":

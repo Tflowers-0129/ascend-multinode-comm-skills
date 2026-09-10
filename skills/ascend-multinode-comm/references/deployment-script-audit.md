@@ -72,6 +72,7 @@ id 标识一次实际启动入口，node 为宿主节点，namespace 标明共�
 | rank/并行 | world_size、node_rank、DP 区间重叠/缺口、TP/PP/EP、可见卡掩码和实例布局 | DP×TP 一律等于本机可见卡；所有 P/D 配置必须相同 |
 | 端口 | endpoint 与 bind 区别、同 namespace 冲突、DP/store 共享端口、动态回连 | 不同节点同端口是冲突；未设 host 网络一定错误 |
 | HCCL | IP/IFNAME 优先级、端口范围、算法变量是否进入实际进程、CANN/HDK 版本 | level0:fullmesh 证明物理全互联；某固定端口数适用所有版本 |
+| MC2 算子选择 | 融合开关的消费方、实际 Matmul/AllToAll/MoE 分支、prefill/decode、图模式、TP/EP、buffer/window 与容量 | 普通 AllToAll 成功代表 MC2 成功；单个融合算子通过代表所有 MoE/量化路径通过 |
 | 容器与拓扑 | rootinfo/hixlep/route.conf 来源、类型、消费方、挂载路径、陈旧文件 | 所有 A5 都必须删 rootinfo，或所有 A5 都必须挂它 |
 | PD/KV/池化 | connector/role/engine_id、元数据与实际 P/D 布局、存储 endpoint、KV layout/dtype/block size、资源释放 | AllReduce 成功就能保证 KV 传输/池化命中 |
 | 启动阶段 | store、CPU 组、HCCL 资源、首次 collective、KV 初始化、首请求 | 所有 TCP 为 ESTABLISHED 可排除 DNS/TCPStore 问题 |
@@ -81,6 +82,8 @@ DP 参数存在版本/后端差异，例如 Ray 场景可能改变本地规模�
 HCCL_IF_IP 优先级高于 HCCL_SOCKET_IFNAME；不能只改后者就认定切换了控制面网卡。[官方环境变量说明](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/850alpha002/hccl/hcclug/hcclug_000093.html)
 
 ## 修复建议与验证闭环
+
+发现 MC2 相关配置时按 [MC2 算子级指引](mc2-testing.md) 列出实际候选与触发条件，并在现场核对版本/资源和执行分支；静态分析器不会自动证明全部 MC2 开关已经生效，也不能靠开关名称猜测 API 或建链原因。
 
 优先给最小改动，并注明成立条件。例如“把第二个 D 节点 dp_start 从 0 改为 8”必须以同组 DP16、每节点8个 DP rank、实际 mp 分配为前提；不要直接改文件或部署。用户请求修复后再应用补丁。
 

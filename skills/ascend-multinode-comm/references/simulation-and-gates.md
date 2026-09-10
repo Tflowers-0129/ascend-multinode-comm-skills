@@ -5,7 +5,7 @@
 | 层级 | 在哪里运行 | 能证明什么 | 不能证明什么 |
 |---|---|---|---|
 | L0 单元/故障注入 | 无卡开发机 | 多网卡决策、端口冲突、超时、协议校验、报告不误放行 | 真实远端网络、Gloo/HCCL 或模型 |
-| L1 无模型真实探针 | 目标主机/容器 | DNS、源绑定 TCP、真实 TCPStore/Gloo；带卡运行真实 HCCL | 未覆盖端口、拓扑/算法/尺寸或 KV 通路 |
+| L1 无模型真实探针 | 目标主机/容器 | DNS、源绑定 TCP、真实 TCPStore/Gloo；带卡运行真实 HCCL 与显式 MC2 算子 case | 未覆盖端口、拓扑/算法/尺寸、MC2 分支/图模式或 KV 通路 |
 | L2 官方 HCCL-VM | 匹配的 x86 Linux 仿真环境 | 虚拟拓扑和通信算法/数据一致性检查，按官方能力使用 | 真实线缆、光模块、交换机、拥塞、RoCE/UB 硬件性能 |
 | L3 真实模型/connector | 正式镜像、实际角色与网络 | 本次版本/负载下 PD、池化、MC2 和请求路径可用 | 所有未来变更/故障、所有模型形状都安全 |
 
@@ -32,6 +32,8 @@ VM 使用的 rootinfo/topo 文件可能是虚拟拓扑入口；这与用户现�
 - 使用测试存储 key/测试实例模拟 KV 读失败，验证无错误命中、超时回收与错误透传。
 
 ## 适配器契约
+
+MC2 新任务优先使用 [逐算子 mc2_cases](mc2-testing.md)，可混合 builtin 与各版本适配器。下面的 `adapters[].stage=mc2` 是兼容旧配置的汇总契约，不提供逐 case 覆盖，也不能与 mc2_cases 混用。`gate --scope mc2` 仅对显式 case 清单生成放行要求；旧式汇总 PASS 不能获得该范围通过。
 
 只有用户显式配置的 argv 才能执行；例子（路径必须已经存在于该容器）：
 
@@ -72,6 +74,6 @@ VM 使用的 rootinfo/topo 文件可能是虚拟拓扑入口；这与用户现�
 
 ## 放行不是百分之百保证
 
-primitives 只要求 inventory/dns/tcp 和配置中每个 group 的 TCPStore/Gloo/HCCL；service 还要求真实请求及当前模式 KV/MC2。任何未提供证据均 UNVERIFIED。生产通信域是否与配置一致、版本是否兼容、模型显存是否足够，仍要另外核对。
+primitives 只要求 inventory/runtime_alignment/dns/tcp 和配置中每个 group 的 TCPStore/Gloo/HCCL；mc2 还要求所有显式 MC2 case 及其汇总通过；service 还要求真实请求及当前模式 KV/MC2。任何未提供证据均 UNVERIFIED。生产通信域是否与配置一致、版本是否兼容、模型显存是否足够，仍要另外核对。
 
 报告记录配置 SHA256；gate 默认一小时有效。不能手工删 required 项获得通过，不把修改后的报告当作原始证据；此版本不提供签名/防篡改服务。变更镜像、拓扑、网络、卡分配后重新执行。不要只把 `check && 启动生产服务` 当作所有模式的安全发布流程。

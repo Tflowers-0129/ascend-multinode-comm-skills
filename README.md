@@ -2,7 +2,7 @@
 
 面向 A5 / vLLM-Ascend，提供两个并列场景：服务启动前的通信预检，以及建链失败后的现场排障。用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，由具备相应访问能力的 agent 直接连接现场。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
 
-预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。两者共用 DNS/TCPStore/Gloo/HCCL、逐卡检测、官方 hccl_test 配方、MC2/KV 验收接口和辅助脚本分析。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
+预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。两者共用 DNS/TCPStore/Gloo/HCCL、逐卡检测、官方 hccl_test 配方、MC2 算子级测试、KV 验收接口和辅助脚本分析。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
 
 这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。本次开发机为 Windows、无 NPU；本机测试结果见 [验证记录](docs/validation.md)。A5 上板、真实 Gloo/HCCL、MC2、KV 数据通路仍需现场验收。
 
@@ -17,6 +17,7 @@
 | 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
 | RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
 | 对本次选定节点做官方打流、逐卡检测、MC2 验证 | [参数化 HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
+| 检测真正的 MC2 融合算子、MoE Dispatch/Combine | [MC2 算子级流程、内置探针与扩展契约](skills/ascend-multinode-comm/references/mc2-testing.md) |
 | 仿真能验证什么，什么不能放行 | [仿真与分级验收](skills/ascend-multinode-comm/references/simulation-and-gates.md) |
 | 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
 
@@ -95,6 +96,16 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 8×8 会依次运行 64 个两 rank 通信域；耗时显著，先单卡验证，再选空闲窗口全量运行。每个卡对校验 AllReduce、AllGather、AllToAll 的数值。它证明的是逻辑卡对可通信，不证明两卡之间有一根直连光纤。
 
+### MC2 通算融合算子单独检测
+
+不仅测试普通 AllGather/AllToAll，还按算子列出 MC2 cases：
+
+- 已接入三类真实 API 调用：Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter。内置探针只覆盖非量化 eager 小形状，必须先核对当前芯片/版本/组网支持，不宣称所有 A5 都可运行。
+- AllToAll-Matmul、Matmul-AllToAll、分组/量化融合、MoE Dispatch/Combine、Fused MoE/MegaMoE、图模式使用各自的版本化测试适配器；由 agent 在现场查找已有测试或按确认的 API 补齐，不以普通 collective 替代。
+- 每个算子记录通信域、rank/卡映射、执行阶段、重复次数、数值校验与异常；一项通过不会覆盖另一项失败或未测。
+
+将 [MC2 清单模板](skills/ascend-multinode-comm/examples/mc2-cases.json) 按 [MC2 指南](skills/ascend-multinode-comm/references/mc2-testing.md) 合入本次配置并核实资源后，运行 `check`，再用 `gate --scope mc2` 查看显式算子清单是否完整通过。`primitives` 通过不代表 MC2 通过；MC2 通过也不替代真实模型请求和 PD/KV 验收。
+
 ## 配置要点
 
 - `nodes[].ssh` 只用于管理入口，可用已有 SSH config 别名。没有密码字段，不放宽 host key 校验；首次主机认证由用户完成。
@@ -109,6 +120,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 - `tcp_ports` 是明确允许临时监听的测试端口，默认两个探针端口不覆盖所有生产端口。扩展为真实服务端口前确保没有在线服务占用；动态分配端口仍需真实 connector 验证。
 - `mode` 可选 `colocated` / `disaggregated` / `pooled`。混部也可能启用远程 KV，见通信指南，不能只凭模式名跳过 KV。
 - `adapters` 是真实版本的自定义可执行程序；具体契约见验收指南。没有适配器不会自动填 PASS。
+- `require_mc2: true` 配合 `mc2_cases` 列出每个需要验证的算子/通信组/模式。builtin 和逐 case adapter 可混合，不能与旧式 `adapters[].stage=mc2` 混用；缺失 case、资源或版本证据不应放行。
 
 ## 结果与安全边界
 
