@@ -9,6 +9,7 @@
 | 要解决的问题 | 入口 |
 |---|---|
 | 让 Codex 按步骤做预检 | [SKILL.md](skills/ascend-multinode-comm/SKILL.md) |
+| 上传一套部署脚本，找影响建链的错误 | [脚本审计说明](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
 | 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
 | RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
 | 18/19 官方打流、8×8 逐卡、MC2 | [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
@@ -16,6 +17,20 @@
 | 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
 
 ## 快速使用
+
+### 上传脚本，只分析不执行
+
+直接把多节点入口和配套配置交给技能，助手会先还原各节点/角色、调用链、变量生效顺序与通信域，指出具体文件行号、影响阶段、成立条件和修复建议。支持助手阅读 shell/Python/Compose/K8s 等；内置工具自动解析静态 shell 子集，复杂部分由助手继续分析。
+
+```bash
+cd skills/ascend-multinode-comm
+python scripts/audit_deployment.py --root examples/audit-demo \
+  --manifest examples/audit-demo/manifest.json --out reports/audit-demo.json
+```
+
+此样例故意包含错误，预期退出 1，并报告重复 HCCL_IP、DP 区间重叠、非法端口。工具生成 JSON + 中文 Markdown。审计真实上传目录时替换 root；manifest 可省略，分组关系明确后再做跨节点比较。工具不执行上传脚本，静态无报错也不会给出建链 PASS。报告和真实上传内容不要提交仓库。
+
+### 在目标环境主动检测
 
 控制端：Python 3.10+、OpenSSH。被测环境：Linux、bash、Python 3.10+、iproute2；collective 需要当前服务使用的 torch/torch_npu/CANN。无需在控制端安装 torch。
 

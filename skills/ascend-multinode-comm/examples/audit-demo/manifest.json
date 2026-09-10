@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "deployments": [
+    {"id":"d0","node":"node-a","group":"decode","namespace":"host","entry":"node-a.sh","cwd":".","role":"decode"},
+    {"id":"d1","node":"node-b","group":"decode","namespace":"host","entry":"node-b.sh","cwd":".","role":"decode"}
+  ],
+  "pd_links": []
+}

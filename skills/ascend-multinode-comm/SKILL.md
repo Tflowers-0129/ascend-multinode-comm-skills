@@ -1,11 +1,26 @@
 ---
 name: ascend-multinode-comm
-description: 面向 Ascend/A5 与 vLLM-Ascend 的多机通信预检和分层排障。适用于 PD 混部、PD 分离、KV 池化服务拉起前，自动发现网卡/IP，定位 DNS/TCPStore/Gloo/HCCL 建链、逐卡通信、RoCE/UB 与 fullmesh、容器拓扑文件和 KV 传输问题，并生成有验证边界的中文报告。
+description: 面向 Ascend/A5 与 vLLM-Ascend 的多机通信预检、部署脚本审计和分层排障。用户上传一套多节点部署脚本时，只读分析影响建链的错误并定位文件行号；需要主动检测时发现网卡/IP，检测 TCPStore/Gloo/HCCL、逐卡通信与拓扑。覆盖 PD 混部、分离、KV 池化，明确静态风险与实测边界。
 ---
 
 # 昇腾多机通信预检
 
 目标：在真实模型服务启动前，把失败尽量定位到具体节点、容器、网卡、阶段、rank 或卡对；基础通信成功不能替代真实服务验收。
+
+## 上传部署脚本：先做只读审计
+
+用户要求“分析这套部署脚本”“找影响建链的错误”时，读 [部署脚本审计](references/deployment-script-audit.md)，进入静态模式，不直接启动下述主动预检。
+
+从上传目录/文件列表还原每个节点的入口、参数、source/调用链、namespace 与实际通信域。可用 `scripts/audit_deployment.py` 提取静态 shell 线索，再由助手读取工具未覆盖的 Python/Compose/K8s/复杂 shell 做语义分析；不要把未覆盖位置简单转交用户，也不要把扫描结果当最终结论。
+
+输出：节点配置对照、通信依赖、按严重性排序的问题（文件行号、证据、影响阶段、成立条件、修复建议）、必须上机确认的项目。区分确定错误、条件风险、缺失信息；只分析不改脚本、不执行上传命令、不把上传原文/报告推送仓库。需要修改或主动测试时另按用户请求进行。
+
+```bash
+python scripts/audit_deployment.py --root /path/to/uploaded-deployment \
+  --manifest /path/to/audit-manifest.json --out reports/deployment-audit.json
+```
+
+manifest 可省略；没有明确分组时不跨文件断言 rank/端口冲突。助手可根据脚本证据生成本地清单并标出推断，不能把不同版本/备选方案都当成同时启动的节点。
 
 ## 执行顺序
 
