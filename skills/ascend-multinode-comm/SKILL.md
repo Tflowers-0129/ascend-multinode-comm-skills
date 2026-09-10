@@ -1,25 +1,36 @@
 ---
 name: ascend-multinode-comm
-description: 面向 Ascend/A5 与 vLLM-Ascend 的服务器现场建链排障。用户给出一组服务器连接信息、各节点容器、工作目录和远端部署脚本，服务当前建链失败时，直接 SSH 到现场，结合日志、实际进程配置、网络与设备状态分层定位 TCPStore/Gloo/HCCL、PD/KV 问题。也支持启动前预检与辅助脚本静态分析；提供脚本默认指服务器上的路径，不要求上传。
+description: 面向 Ascend/A5 与 vLLM-Ascend 的多机通信预检与现场排障。用户提供服务器连接信息、容器、工作目录和远端部署脚本后，启动前按计划配置与现场状态分阶段验证 TCPStore/Gloo/HCCL、PD/KV 通信；建链失败时结合日志、实际进程和网络设备状态定位原因。两个场景并列，支持辅助脚本分析；脚本默认位于服务器，不要求上传，不绑定特定 agent 产品。
 ---
 
-# 昇腾多机现场建链排障与预检
+# 昇腾多机通信预检与现场排障
 
-目标：解决用户指定服务器上正在发生的建链失败，定位到节点、容器、阶段、rank、链路或配置来源。默认先调查现有故障；只有尚未启动服务的预检请求，才从无模型探针开始。节点数量与通信分组来自现场，不限定为两台，也不默认所有节点配置相同。
+目标：在用户指定服务器上，启动前发现影响建链的配置与通信问题，或在建链失败后定位到节点、容器、阶段、rank、链路与配置来源。两者按用户意图选择，不默认已经发生故障。节点数量与通信分组来自现场，不限定为两台，也不默认所有节点配置相同。
+
+本技能不依赖特定 agent 品牌或专属 API。使用当前 agent 实际具备的文件读取、SSH/服务器连接和命令执行能力；先核实能力与权限，缺少时明确报告，不能把文档步骤或本地分析冒充现场执行。
 
 ## 先选择入口
 
 | 用户意图 | 行为 |
 |---|---|
-| 这些服务器、容器、工作目录和部署脚本，当前建链失败，请排查 | 默认入口：读 [现场排障流程](references/remote-server-audit.md)，连接各目标，读取远端脚本、日志和实际状态，按失败阶段定位 |
-| 服务启动前验证通信、打流、检测 HCCL | 按下方主动预检流程，明确节点、空闲卡、端口与时间窗 |
+| 这些服务器、容器、工作目录和部署脚本，服务启动前验证通信 | 按下方“启动前通信预检”流程，从远端计划配置与现场环境出发，明确空闲卡、端口与时间窗；不要求故障日志或现有 worker |
+| 这些服务器、容器、工作目录和部署脚本，当前建链失败，请排查 | 按下方“现场建链排障”流程及 [现场排障指引](references/remote-server-audit.md)，读取远端脚本、日志和实际状态，按失败阶段定位 |
 | 明确只分析本地附件、不连接服务器 | 辅助静态审计；不能据此诊断当前现场状态 |
 
 用户在服务器场景中“提供脚本”即提供远端路径；不要要求先下载、上传、复制到本地，或先制作审计 manifest。若给出容器，工作目录默认按该容器内路径理解，脚本相对路径相对于该目录；核查实际存在性，必要时澄清宿主/容器边界，不擅自换一个同名文件。
 
-如果用户仅要求完善技能/文档，不索要真实凭据、不连接历史服务器。实际排障时补齐缺失的 IP/SSH 别名、端口、用户名、认证方式、容器、工作目录和脚本路径。角色、并行参数、日志位置等优先从远端发现，只有会改变结论的歧义才问用户。密码经实际可用的安全输入渠道或用户自己的 SSH 终端提供，不写入聊天、配置或报告。
+如果用户仅要求完善技能/文档，不索要真实凭据、不连接历史服务器。实际预检或排障时补齐缺失的 IP/SSH 别名、端口、用户名、认证方式、容器、工作目录和脚本路径；连接信息、认证与定向读取边界见 [远端指引](references/remote-server-audit.md) 第 1、2、4 节。角色、并行参数、版本等优先从远端发现，只有会改变结论的歧义才问用户。密码经实际可用的安全输入渠道或用户自己的 SSH 终端提供，不写入聊天、配置或报告。意图不明确且会影响测试范围时确认是预检还是排障；不因为给了脚本就判定服务有故障。
 
-## 默认现场排障顺序
+## 启动前通信预检
+
+1. 连接并核实每个目标的容器、服务用户、工作目录及远端脚本，读取入口/source 依赖而不执行部署脚本。按 [脚本分析规则](references/deployment-script-audit.md) 还原计划配置，并读 [通信阶段](references/communication-stages.md)，确认混部/分离/池化、P/D/存储角色、实际 TP/PP/DP/EP 分组、镜像与 CANN 版本。不同 P、D 实例不要硬塞进一个生产 HCCL 通信域。
+2. 核对计划使用的网卡/IP、路由、端口占用、设备可见性及容器挂载。服务尚未启动时，没有 worker、故障日志或业务监听是正常前提，不判建链失败；计划参数与已实测状态分别记录。容器尚未运行或环境不齐则报告检查缺口，不为预检擅自创建/启动容器或服务。
+3. 读 [拓扑与配置文件](references/topology-and-files.md)，区分管理 IP、Host 控制面 IP、NPU 数据面地址；RoCE/UB 是传输线索，fullmesh 是拓扑或算法线索，不能三选一。从 `examples/cluster.json` 制作本地测试配置，保留自动探测，以业务 CIDR 或明确 data_ip 消除多网卡歧义；目标与卡列表来自本次信息。先审阅必要 env_scripts，再运行 `inspect`；不得将部署脚本当成环境初始化脚本。
+4. 确认空闲卡、允许临时监听的端口与时间窗后，以独立测试进程运行 `check`，按实际通信域验证 DNS/TCP、TCPStore、Gloo、HCCL。不能向未启动的生产端口建连失败就判网络不通，也不能占用线上通信组。逐卡或官方打流见 [HCCL 检测](references/hccl-testing.md)，纯 TCP 不算 HCCL 通过，alltoall/aiv 不算 MC2 通过。
+5. 实际 connector 的 P→D KV、池化或 MC2 验证，需匹配适配器与获准资源；缺失时保持 `UNVERIFIED`，并给出启动后验收项。预检请求不自动授权拉起完整模型服务。探针失败时按 [现场故障](references/failure-playbook.md) 定位被测阶段，保留原计划配置与 tested_environment 的差异。
+6. 输出已确认配置错误、条件风险、各阶段实测/未测、时刻、版本、节点/卡映射与后续动作。不把没有现存故障判成全部通过，不承诺预检通过就保证服务启动。需要仿真或分级放行时读 [仿真与验收边界](references/simulation-and-gates.md)。
+
+## 现场建链排障
 
 1. 连接目标服务器，确认各自现有容器、容器内用户、工作目录、远端入口及依赖；同名容器在不同宿主上不是同一实例。读取现有日志/退出状态，服务仍在时核对实际进程，不重新运行部署脚本来“看看报错”。
 2. 对照 [通信阶段](references/communication-stages.md) 关联各节点/rank 的最后成功点、首个失败点及对端证据，区别 S0 环境、S1 store/DNS、S2 Gloo、S3/S4 HCCL/首算子、S5/S6 KV。读 [现场故障](references/failure-playbook.md) 辅助定位，不用最后一个 timeout 代替首因。
@@ -29,7 +40,7 @@ description: 面向 Ascend/A5 与 vLLM-Ascend 的服务器现场建链排障。�
 
 ## 辅助：脚本语义与静态检查
 
-读 [脚本分析规则](references/deployment-script-audit.md) 还原 source/调用链、变量生效顺序和真实通信域。可直接分析远端带行号文本；`scripts/audit_deployment.py` 只在已有必要本地文本时提供线索，不是现场排障前置条件。复杂 Shell/Python/Compose/K8s 由助手继续语义分析。明确仅本地附件审计时不自动连接服务器。原文/现场报告不推送仓库。
+预检与排障都可读 [脚本分析规则](references/deployment-script-audit.md) 还原 source/调用链、变量生效顺序和真实通信域。可直接分析远端带行号文本；`scripts/audit_deployment.py` 只在已有必要本地文本时提供线索，不是远端预检或排障前置条件。复杂 Shell/Python/Compose/K8s 由助手继续语义分析。明确仅本地附件审计时不自动连接服务器。原文/现场报告不推送仓库。
 
 ```bash
 python scripts/audit_deployment.py --root /path/to/uploaded-deployment \
@@ -37,15 +48,6 @@ python scripts/audit_deployment.py --root /path/to/uploaded-deployment \
 ```
 
 manifest 可省略；没有明确分组时不跨文件断言 rank/端口冲突。助手可根据脚本证据生成本地清单并标出推断，不能把不同版本/备选方案都当成同时启动的节点。
-
-## 启动前预检 / 经授权的定向复现
-
-1. 先读 [通信阶段](references/communication-stages.md)，确认混部/分离/池化、P/D/存储角色、实际 TP/PP/DP/EP 分组、镜像与 CANN 版本。不同 P、D 实例不要硬塞进一个生产 HCCL 通信域。
-2. 读 [拓扑与配置文件](references/topology-and-files.md)，区分管理 IP、Host 控制面 IP、NPU 数据面地址；RoCE/UB 是传输线索，fullmesh 是拓扑或算法线索，不能三选一。
-3. 从 `examples/cluster.json` 制作本地配置，保留自动探测，指定业务 CIDR 或明确 data_ip 消除多网卡歧义。先 `inspect`，再经用户确认空闲卡、端口与时间窗后 `check`。工具不自动登录历史地址、不复用聊天里的密码。
-4. 对每一个真实通信域运行 TCPStore、Gloo、HCCL；本次选定节点的逐卡或官方打流见 [HCCL 检测](references/hccl-testing.md)。目标来自当前清单，不复用任何历史地址。纯 TCP 不算 HCCL 通过，alltoall/aiv 不算 MC2 通过。
-5. 按实际 connector 执行 P→D KV 或池化适配器；未提供真实适配器则保持 `UNVERIFIED`。读 [现场故障](references/failure-playbook.md) 对照证据，不从错误码直接猜防火墙。
-6. 输出报告时必须列出实测/未测、测试时刻、版本、节点和卡映射、阶段失败与建议。需要仿真时读 [仿真与验收边界](references/simulation-and-gates.md)。
 
 ## 工具
 
@@ -69,6 +71,8 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 - `export HCCL_ALGO=level0:fullmesh` 只在用户指定或实际脚本有此设置时继承测试，不全局改写算法；配置信息不是物理 fullmesh 的证明。
 - 不自动停止用户服务、清空 NPU、调整防火墙/路由、删除配置或增大安全权限。日志可能含私网拓扑，报告默认不进 Git。
 
-## 安装与自检
+## 加载与自检
 
-把本技能目录复制到用户的 `.codex/skills/ascend-multinode-comm`；脚本和 examples 必须一起复制。仓库根目录执行 `python -m unittest discover -s tests -v`。硬件实测和 CPU/Linux 集成测试分别记录，不能把 mock 当作硬件验收。
+保留整个技能目录及 scripts、references、examples，按所用 agent 的技能加载机制添加；没有加载器但能读取文件的 agent 可直接读取本文件并按需打开引用资源，不假定统一安装路径或调用语法。工具也可作为 Python CLI 独立运行；需要控制端 Python 3.10+ 与 OpenSSH，目标环境和测试资源按相应参考文档准备。不同 agent 的认证与执行能力需现场核实，未提供相应能力时不能宣称完成远端预检或排障。
+
+仓库根目录执行 `python -m unittest discover -s tests -v`。硬件实测和 CPU/Linux 集成测试分别记录，不能把 mock 当作硬件验收。
