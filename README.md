@@ -1,10 +1,10 @@
 # Ascend 多机通信预检与现场排障 Skills
 
-面向 A5 / vLLM-Ascend，提供两个并列场景：服务启动前的通信预检，以及建链失败后的现场排障。用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，由具备相应访问能力的 agent 直接连接现场。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
+面向 Ascend A3 / A5 与 vLLM-Ascend，提供两个并列场景：服务启动前的通信预检，以及建链失败后的现场排障。用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，由具备相应访问能力的 agent 直接连接现场。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
 
 预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。两者共用 DNS/TCPStore/Gloo/HCCL、逐卡检测、官方 hccl_test 配方、MC2 算子级测试、KV 验收接口和辅助脚本分析。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
 
-这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。本次开发机为 Windows、无 NPU；本机测试结果见 [验证记录](docs/validation.md)。A5 上板、真实 Gloo/HCCL、MC2、KV 数据通路仍需现场验收。
+这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。本次开发机为 Windows、无 NPU；本机测试结果见 [验证记录](docs/validation.md)。A3/A5 上板、真实 Gloo/HCCL、MC2、KV 数据通路仍需现场验收。
 
 ## 导航
 
@@ -15,11 +15,13 @@
 | 给出服务器、容器、工作目录、远端脚本 | [共用连接信息与现场排障指引](skills/ascend-multinode-comm/references/remote-server-audit.md) |
 | 辅助核对部署脚本里的配置错误 | [脚本分析规则](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
 | 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
-| RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
+| A3/A5 平台、镜像、HCCS/vNIC 与分组边界 | [平台识别与分支检查](skills/ascend-multinode-comm/references/platform-a3-a5.md) |
+| HCCS / RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
 | 对本次选定节点做官方打流、逐卡检测、MC2 验证 | [参数化 HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
 | 检测真正的 MC2 融合算子、MoE Dispatch/Combine | [MC2 算子级流程、内置探针与扩展契约](skills/ascend-multinode-comm/references/mc2-testing.md) |
 | 仿真能验证什么，什么不能放行 | [仿真与分级验收](skills/ascend-multinode-comm/references/simulation-and-gates.md) |
 | 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
+| 提供远端成功部署脚本，提炼平台/版本经验 | [成功样本的选择、读取和归档](skills/ascend-multinode-comm/references/known-good-deployments.md) |
 
 ## 快速使用
 
@@ -85,7 +87,7 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 
 `inspect` 只有发现阶段，退出码通常为 2（未完整验证），不是执行错误。`check` 默认也保留 `model_e2e=UNVERIFIED`，基础通过后用 `gate --scope primitives` 查看基础范围；不能把它叫作服务完整验收。服务起来后需同镜像、同配置的真实请求以及相应 KV/MC2 适配器。
 
-`examples/cluster.json` 仅展示结构：按现场增删 nodes/groups，填写真实 SSH 目标、容器、工作目录和选定空闲卡；`[0]` 只是最小卡列表示例。SSH 占位符未替换会在连接前报错。示例不设置现场 CIDR、环境脚本路径或 fullmesh；根据当前证据填写 CIDR/地址、必要 env_scripts 和 environment，不能沿用文档中的节点身份。
+`examples/cluster.json` 仅展示结构：按现场增删 nodes/groups，填写真实 SSH 目标、容器、工作目录和选定空闲卡；`[0]` 只是最小卡列表示例。SSH 占位符未替换会在连接前报错。示例不设置现场 CIDR、环境脚本路径或 fullmesh；根据当前证据填写 CIDR/地址、必要 env_scripts 和 environment，不能沿用文档中的节点身份。`platform: auto` 保守识别实时型号；未知不会自动认作 A3 或 A5，声明平台也不能代替硬件证据。
 
 两机所有选定卡对：
 
@@ -100,7 +102,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 不仅测试普通 AllGather/AllToAll，还按算子列出 MC2 cases：
 
-- 已接入三类真实 API 调用：Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter。内置探针只覆盖非量化 eager 小形状，必须先核对当前芯片/版本/组网支持，不宣称所有 A5 都可运行。
+- 已接入三类真实 API 调用：Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter。内置探针只覆盖非量化 eager 小形状，必须先核对当前芯片/版本/组网支持，不宣称所有 A3/A5 组合都可运行。
 - AllToAll-Matmul、Matmul-AllToAll、分组/量化融合、MoE Dispatch/Combine、Fused MoE/MegaMoE、图模式使用各自的版本化测试适配器；由 agent 在现场查找已有测试或按确认的 API 补齐，不以普通 collective 替代。
 - 每个算子记录通信域、rank/卡映射、执行阶段、重复次数、数值校验与异常；一项通过不会覆盖另一项失败或未测。
 
@@ -108,6 +110,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 ## 配置要点
 
+- `nodes[].platform` 可为 `auto`（默认）、`A3`、`A5`，用于与实时型号比对；不指定镜像、卡数或算法默认值。身份矛盾或同组混合平台会暂停主动测试；识别不全可以执行通用基础探针，但不会执行 MC2 或通过 mc2/service gate。独立 P/D 组的平台可不同，跨平台 KV 支持仍需另证。详见平台指南。
 - `nodes[].ssh` 只用于管理入口，可用已有 SSH config 别名。没有密码字段，不放宽 host key 校验；首次主机认证由用户完成。
 - `nodes[].container` 不填即宿主机；工具不新建容器。`env_scripts` 在该运行环境内生效。
 - `nodes[].workdir` 是该运行环境内的 Linux 绝对目录，在 source 和探针启动前生效。`container_user` 可指定已核实的容器服务用户名/UID（可带组），仅用于有 container 的节点；不自动切到 root。未设置时保留原来的执行上下文，不能声称已与 worker 对齐。
@@ -116,7 +119,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 - `devices` 是 torch 在当前可见设备掩码下的逻辑编号；可选 `physical_devices` 才是 hccn 查询编号。通过 npu-smi 映射核对，不能默认二者相同。
 - `data_ip: auto` 配合现场确认的 `fabric_cidr` 主动找唯一 UP 网卡；多解/无解报错。不要由管理地址尾号猜业务地址。
 - `groups` 是待验收通信域列表。PD 分离中 P 与 D 分开定义，必要时为 TP/EP/PP 子域分别建配置；工具不会从模型参数自动推断所有子域。
-- `environment` 可设置 `HCCL_ALGO=level0:fullmesh` 等；不会默认写 HCCL 端口范围，避免覆盖版本行为。网卡/IP 自动按节点设置。
+- `environment` 可设置 `HCCL_ALGO=level0:fullmesh`、`HCCL_BUFFSIZE`、`HCCL_OP_EXPANSION_MODE` 等；不按平台写入默认值，也不会默认写 HCCL 端口范围。网卡/IP 自动按节点设置；P/D 环境不同需分配置测试，不能用全局 environment 覆盖组间差异。
 - `tcp_ports` 是明确允许临时监听的测试端口，默认两个探针端口不覆盖所有生产端口。扩展为真实服务端口前确保没有在线服务占用；动态分配端口仍需真实 connector 验证。
 - `mode` 可选 `colocated` / `disaggregated` / `pooled`。混部也可能启用远程 KV，见通信指南，不能只凭模式名跳过 KV。
 - `adapters` 是真实版本的自定义可执行程序；具体契约见验收指南。没有适配器不会自动填 PASS。
@@ -129,6 +132,12 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 工具会创建短时监听器、NPU collective 和自有子进程，需要用户授权的节点、空闲卡与端口。它不改防火墙、路由、时钟、拓扑文件，不杀用户服务。SSH 中断后远端 watchdog 在超时上限内回收自有 worker；内核不可中断任务、MPI 外部远端 daemon 等不能承诺即时清理，需现场核验。
 
 报告可能包含 IP、文件摘要、进程错误和拓扑信息，`reports/`、`*.local.json`、日志不入库。发布示例仅用待填写占位符、通用节点名或测试用文档地址，不是预设待连接目标；执行目标必须来自用户本次清单。
+
+## 需要提供很多成功脚本吗
+
+不需要先攒够数量，也不影响开始预检或排障。优先提供已有 A3/A5、混部/分离/池化、不同网络或 MC2 分支的代表案例；只换 IP 的大量脚本通常帮助有限。先给服务器连接信息、容器、工作目录和远端入口，最好附成功时间与真实请求日志路径，其余依赖/版本由 agent 在授权范围发现。
+
+样本用于提炼有条件的检查规则，不直接复制成默认模板。进程启动或 health=200 不代表 KV/MC2 已执行，历史成功也不保证当前环境可用。原始脚本/日志不自动推送仓库，密码不进聊天；具体字段与处理边界见 [成功部署样本指引](skills/ascend-multinode-comm/references/known-good-deployments.md)。
 
 ## 在不同 agent 中使用
 

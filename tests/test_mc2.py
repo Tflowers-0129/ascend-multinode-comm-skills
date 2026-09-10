@@ -210,7 +210,7 @@ class MC2Tests(unittest.TestCase):
         def remote(node, payload, env=None):
             if payload["action"] == "inventory":
                 result = inv(["192.0.2.1" if node["name"] == "a" else "192.0.2.2"])
-                result.update(proxy_present=False, mounts=[], env={})
+                result.update(proxy_present=False, mounts=[], env={}, npu=dict(rc=0, text="NPU Name: 910_9392"))
             else:
                 result = [dict(rc=0, consistent=True)]
             return dict(status="PASS", events=[dict(event="result", result=result)])
@@ -257,7 +257,7 @@ class MC2Tests(unittest.TestCase):
         config = self.config()
         def remote(node, payload, env=None):
             result = inv(["192.0.2.1" if node["name"] == "a" else "192.0.2.2"])
-            result.update(proxy_present=False, mounts=[], env={})
+            result.update(proxy_present=False, mounts=[], env={}, npu=dict(rc=0, text="NPU Name: 910_9392"))
             if payload["action"] == "dns":
                 result = [dict(rc=0, consistent=True)]
             return dict(status="PASS", events=[dict(event="result", result=result)])

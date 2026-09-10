@@ -1,11 +1,11 @@
-# RoCE、UB/UBoE、fullmesh 与容器拓扑文件
+# HCCS、RoCE、UB/UBoE、fullmesh 与容器拓扑文件
 
-## 不要做错误的三选一
+## 不要把不同维度做成互斥选项
 
 | 维度 | 候选值 | 有效证据 | 不能作证的现象 |
 |---|---|---|---|
 | Host 控制面 | TCP/IP 网卡、源 IP、路由 | 当前 namespace 的 ip/route、源地址绑定握手 | SSH 管理地址可登录 |
-| 设备传输能力 | RoCE、UB、UBoE，可能混合 | RDMA link layer、URMA 端口状态、hccn/HiXLEP、实际数据通道日志 | 仅安装某个工具/有一个设备文件 |
+| 设备传输能力 | HCCS、RoCE、UB、UBoE，可能分层/混合 | HCCS/vNIC/超节点信息、RDMA link layer、URMA 端口状态、hccn/HiXLEP、实际数据通道日志 | 仅安装某个工具/有一个设备文件/识别到某种芯片 |
 | 物理组网 | 交换网络、直连、层级网络、fullmesh 等 | 每卡/端口对端邻接表、交换机端口、链路状态与路由 | 一个 AllReduce 成功 |
 | 通信算法 | level0:fullmesh 等 | 进程实际环境和 HCCL 算法选择日志 | 脚本有 export，但运行进程未继承 |
 
@@ -17,14 +17,14 @@
 
 1. 宿主机和容器分别运行 inspect，比较地址、路由、设备可见性、拓扑文件 hash/挂载来源、CANN/torch 版本。容器 bridge/NAT 与 host 网络需区分。
 2. 从 UP 网卡选业务 IP，记录网卡名和 MTU；有多块可行网卡则要求 CIDR 或明确 IP。到每个 peer 的实际源路由与反向路径仍需核对，不能只验证 master。
-3. 查询 npu-smi mapping。用户提供 physical_devices 时采集每张物理卡的 hccn IP、link、net_health、LLDP；没有映射不盲目对编号 0~7 做配置操作。
+3. 按 [A3/A5 分支](platform-a3-a5.md) 查询实时型号和 npu-smi mapping/list。提供 physical_devices 时采集每张物理卡的 hccn IP、link、net_health、LLDP；识别到 A3 时追加 vNIC/netdetect/gateway。superpod/SDID 查询须先确认 chip ID；没有映射不盲目套固定编号/卡数。
 4. 采集 rdma link、sysfs RDMA 端口 link_layer/state/gid type、urma_admin show、UB 设备线索。工具分别列 capability candidates 和 active transport；后者没有实际通道证据保持 UNVERIFIED。
 5. 由 LLDP/HiXLEP/平台管理输出构造卡/端口邻接表，区分 PEER2PEER 和 PEER2NET；检查每端口有且仅有正确对端、两侧对称、状态 UP。需要证明物理 fullmesh 时，验证所声明层级的所有必要边，不能只看跨服务器两张卡。
 6. 跑两机逐卡矩阵，再跑多机 collective 大小梯度。逻辑通路可能经过交换机或中间节点；这两个测试不能替代物理线缆拓扑证据。
 
-目前工具自动收集证据并给出 RoCE/UB 候选，不对厂商/版本各异的 LLDP、URMA 输出强行套一个未知 schema。缺少完整邻接表时物理拓扑明确标为 UNVERIFIED，交给技能按原始证据判断。这比误识别成 fullmesh 更可靠，但也意味着此初版尚未实现所有 A5 版本的全自动物理拓扑还原。
+目前工具自动收集证据并给出 HCCS/RoCE/UB 能力候选，不对厂商/版本各异的 LLDP、URMA 输出强行套一个未知 schema。A3 型号仅触发 HCCS 检查候选，不证明当前链路采用 HCCS。缺少完整邻接表时物理拓扑明确标为 UNVERIFIED，交给技能按原始证据判断；此初版尚未实现所有 A3/A5 版本的全自动物理拓扑还原。
 
-设备 IP 检测是另一层：在版本和 RoCE 场景支持时，可用 `hccn_tool -i 0 -ping -g address 对端设备IP`；Host ping 和 Device ping 不互相替代。UB-only 没有可用的 hccn IP 时不能一律报 RoCE 故障。[官方互联预检](https://docs.vllm.ai/projects/ascend/en/v0.23.0/installation.html)
+设备 IP 检测是另一层：在版本和 RoCE 场景支持时，可用 `hccn_tool -i 本次物理设备ID -ping -g address 对端设备IP`；A3 HCCS 使用经核实的 vNIC 与 hccs_ping 路径，见平台指南。两者均需主动探测授权，Host ping 和 Device ping 不互相替代。UB-only 没有可用的 hccn IP 时不能一律报 RoCE 故障。[官方互联预检](https://docs.vllm.ai/projects/ascend/en/v0.23.0/installation.html)
 
 ## 三个容易混淆的路径
 

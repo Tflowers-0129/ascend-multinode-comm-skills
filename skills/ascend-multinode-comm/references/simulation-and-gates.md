@@ -74,6 +74,6 @@ MC2 新任务优先使用 [逐算子 mc2_cases](mc2-testing.md)，可混合 buil
 
 ## 放行不是百分之百保证
 
-primitives 只要求 inventory/runtime_alignment/dns/tcp 和配置中每个 group 的 TCPStore/Gloo/HCCL；mc2 还要求所有显式 MC2 case 及其汇总通过；service 还要求真实请求及当前模式 KV/MC2。任何未提供证据均 UNVERIFIED。生产通信域是否与配置一致、版本是否兼容、模型显存是否足够，仍要另外核对。
+primitives 只要求 inventory/runtime_alignment/dns/tcp 和配置中每个 group 的 TCPStore/Gloo/HCCL；mc2 还要求 platform 身份检查、所有显式 MC2 case 及其汇总通过；service 还要求 platform、真实请求及当前模式 KV/MC2。任何未提供证据均 UNVERIFIED。平台型号通过不是版本/API 兼容性证明；生产通信域是否与配置一致、版本是否兼容、模型显存是否足够，仍要另外核对。[A3/A5 平台检查边界](platform-a3-a5.md)
 
 报告记录配置 SHA256；gate 默认一小时有效。不能手工删 required 项获得通过，不把修改后的报告当作原始证据；此版本不提供签名/防篡改服务。变更镜像、拓扑、网络、卡分配后重新执行。不要只把 `check && 启动生产服务` 当作所有模式的安全发布流程。

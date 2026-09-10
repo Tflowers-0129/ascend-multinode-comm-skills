@@ -7,8 +7,8 @@
   "master_port": 29673,
   "stages": ["tcpstore", "gloo", "hccl"],
   "nodes": [
-    {"name": "node-a", "ssh": "REPLACE_SSH_NODE_A", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": [], "data_ip": "auto", "devices": [0]},
-    {"name": "node-b", "ssh": "REPLACE_SSH_NODE_B", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": [], "data_ip": "auto", "devices": [0]}
+    {"name": "node-a", "ssh": "REPLACE_SSH_NODE_A", "platform": "auto", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": [], "data_ip": "auto", "devices": [0]},
+    {"name": "node-b", "ssh": "REPLACE_SSH_NODE_B", "platform": "auto", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": [], "data_ip": "auto", "devices": [0]}
   ],
   "groups": [{"name": "model-domain", "nodes": ["node-a", "node-b"]}],
   "environment": {},

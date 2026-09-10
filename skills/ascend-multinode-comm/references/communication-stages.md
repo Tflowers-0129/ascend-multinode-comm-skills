@@ -1,6 +1,8 @@
 # vLLM-Ascend 通信发生在什么时候
 
-这里把“协议/后端”和“承载网络”分开。TCPStore 是 rendezvous/键值交换服务；Gloo 是 CPU 分布式后端；HCCL 是昇腾集合通信库；TCP、RoCE、UB/UBoE 属于不同层面的传输。某后端可以同时需要 Host 控制面与 Device 数据面，不是四选一。
+这里把“协议/后端”和“承载网络”分开。TCPStore 是 rendezvous/键值交换服务；Gloo 是 CPU 分布式后端；HCCL 是昇腾集合通信库；TCP、HCCS、RoCE、UB/UBoE 属于不同层面的传输。某后端可以同时需要 Host 控制面与 Device 数据面，不是互斥选项。
+
+以下阶段同时用于 A3/A5。S0 先按 [平台分支](platform-a3-a5.md) 核实硬件、镜像和版本；S3/S4 再按实际 HCCS/RoCE/UB 与 MC2 支持选测试；S5/S6 使用该版本真实 connector。不能把同一阶段表理解为两种平台的设备地址、资源文件或融合 API 完全相同。
 
 ## 三种部署的最小区别
 

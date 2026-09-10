@@ -22,6 +22,7 @@ import threading
 import time
 import traceback
 
+# 历史线协议名保持兼容；不代表仅支持 A5。
 PREFIX = "A5COMM "
 SOURCE = globals().get("SOURCE") or Path(__file__).read_text(encoding="utf-8")
 BOOT = "import sys;SOURCE=sys.stdin.buffer.read().decode('utf-8');exec(compile(SOURCE,'<a5-preflight>','exec'))"
@@ -32,7 +33,8 @@ MC2_APIS = {"matmul_all_reduce": "npu_mm_all_reduce_base",
 ENV_KEYS = {"HCCL_IF_IP", "HCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME", "HCCL_ALGO",
             "HCCL_IF_BASE_PORT", "HCCL_HOST_SOCKET_PORT_RANGE", "ASCEND_RT_VISIBLE_DEVICES",
             "ASCEND_VISIBLE_DEVICES", "PYTHONHASHSEED", "HCCL_CONNECT_TIMEOUT",
-            "HCCL_EXEC_TIMEOUT", "ASCEND_GLOBAL_RESOURCE_CONFIG"}
+            "HCCL_EXEC_TIMEOUT", "ASCEND_GLOBAL_RESOURCE_CONFIG", "HCCL_BUFFSIZE",
+            "HCCL_OP_EXPANSION_MODE"}
 
 
 def emit(kind, **kw):
@@ -106,11 +108,55 @@ def read_small(path):
         return None
 
 
+def platform_identity(inv, declared="auto"):
+    """保守识别实时型号；声明、镜像名和 DAV_2201 本身不是硬件证据。"""
+    result = inv.get("npu", {})
+    output = result.get("text", "") if result.get("rc") == 0 else ""
+    patterns = {"A3": r"(?<![\w])(?:Ascend\s*)?910_93\d*(?![\w])",
+                "A5": r"(?<![\w])(?:Ascend\s*)?950(?:DT|PR)(?:[_-][A-Za-z0-9]+)*(?![\w])",
+                "A2": r"(?<![\w])(?:Ascend\s*)?910B[1-4](?![\w])"}
+    models = {family: sorted(set(re.findall(pattern, output, re.I)))
+              for family, pattern in patterns.items()}
+    observed = [family for family, values in models.items() if values]
+    family = observed[0] if len(observed) == 1 else "UNKNOWN"
+    conflict = len(observed) > 1 or (declared != "auto" and family != "UNKNOWN" and declared != family)
+    status = "FAIL" if conflict else "PASS" if family in {"A3", "A5"} else "UNVERIFIED"
+    return {"status": status, "declared": declared, "observed": family,
+            "models": models, "source": {"command": "npu-smi info", "rc": result.get("rc")},
+            "reason": "声明与实时型号矛盾或同节点发现多平台" if conflict else
+                      "仅确认平台身份，不证明版本、拓扑或算子支持" if status == "PASS" else
+                      "缺少可识别的 A3/A5 实时型号；声明不能补成 PASS，需现场核对 board 信息"}
+
+
+def platform_audit(nodes, inventories, groups):
+    rows = {n["name"]: platform_identity(inventories[n["name"]], n.get("platform", "auto"))
+            for n in nodes if n.get("devices")}
+    mixed = []
+    for group in groups:
+        families = {rows[name]["observed"] for name in group["nodes"] if name in rows} - {"UNKNOWN"}
+        if len(families) > 1:
+            mixed.append(group["name"])
+    conflict = any(row["status"] == "FAIL" for row in rows.values())
+    status = "FAIL" if conflict else "UNVERIFIED" if mixed or any(
+        row["status"] != "PASS" for row in rows.values()) else "PASS"
+    return {"status": status, "nodes": rows, "mixed_groups": mixed,
+            "block_active": conflict or bool(mixed),
+            "scope": "型号一致性及组内平台隔离，不是版本/API/跨平台 KV 兼容性认证",
+            "reason": "本工具不主动测试混合平台通信组；需专门支持证明与版本化适配器" if mixed else ""}
+
+
+def hccn_fields(inv):
+    common = ("ip", "link", "net_health", "lldp")
+    return common + (("vnic", "netdetect", "gateway")
+                     if platform_identity(inv)["observed"] == "A3" else ())
+
+
 def inventory(payload):
     commands = {"ip": ["ip", "-j", "address", "show"],
                 "routes": ["ip", "-j", "route", "show"],
                 "rdma": ["rdma", "link", "show"], "urma": ["urma_admin", "show"],
                 "npu": ["npu-smi", "info"], "mapping": ["npu-smi", "info", "-m"],
+                "npu_list": ["npu-smi", "info", "-l"],
                 "listeners": ["ss", "-ltn"],
                 "versions": [sys.executable, "-c",
                     "import importlib.metadata as m,json; names=['torch','torch-npu','vllm','vllm-ascend'];"
@@ -142,7 +188,7 @@ def inventory(payload):
     # hccn 使用物理卡号；不能从 torch logical index 猜测。
     for dev in payload.get("physical_devices", []):
         data["hccn"][str(dev)] = {field: run_cmd(["hccn_tool", "-i", str(dev), "-" + field, "-g"], 5)
-                                  for field in ("ip", "link", "net_health", "lldp")}
+                                  for field in hccn_fields(data)}
     return data
 
 
@@ -193,6 +239,9 @@ def topology(inv):
     if inv.get("ub_devices") or (inv.get("urma", {}).get("rc") == 0 and inv["urma"]["text"].strip()):
         evidence.append("发现 UB/URMA 设备或管理输出；需拓扑/链路及运行日志确认 UB/UBoE")
         capabilities.append("UB/URMA")
+    if platform_identity(inv)["observed"] == "A3":
+        evidence.append("实时型号属于 A3；需 vNIC、superpod/SDID、HCCS 链路和实际通道日志确认 HCCS 路径")
+        capabilities.append("HCCS")
     algo = inv.get("env", {}).get("HCCL_ALGO", "")
     return {"transport": "UNVERIFIED", "capability_candidates": capabilities, "physical_topology": "UNVERIFIED",
             "configured_algo": algo, "fullmesh_configured": "level0:fullmesh" in algo,
@@ -590,6 +639,8 @@ def validate_config(cfg):
     if len(set(names)) != len(names):
         raise ValueError("节点名重复")
     for n in nodes:
+        if n.get("platform", "auto") not in ("auto", "A3", "A5"):
+            raise ValueError("platform 必须为 auto/A3/A5；声明不替代现场型号证据")
         if "REPLACE" in n["ssh"]:
             raise ValueError("请用本次确认的 SSH 目标替换示例占位符")
         if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@:-]*", n["ssh"]):
@@ -871,7 +922,8 @@ def run(config, command):
             key = g["name"] + "/" + stage
             report["required"]["primitives"].append(key)
             checks[key] = {"status": "UNVERIFIED"}
-    service_required = list(report["required"]["primitives"])
+    checks["platform"] = {"status": "UNVERIFIED"}
+    service_required = list(report["required"]["primitives"]) + ["platform"]
     extra = ["model_e2e"]
     if cfg["mode"] == "disaggregated" or cfg.get("require_kv_transfer"):
         extra.append("kv_transfer")
@@ -894,6 +946,9 @@ def run(config, command):
             vals = list(ex.map(lambda n: call_remote(n, dict(action="inventory", physical_devices=n.get("physical_devices", []), timeout_s=cfg["timeout_s"]), cfg.get("environment", {})), nodes))
         for n, val in zip(nodes, vals):
             report["inventory"][n["name"]] = get_result(val)
+        platform_groups = cfg["groups"] if command != "pairs" else [
+            {"name": "card_pairs", "nodes": [n["name"] for n in nodes]}]
+        checks["platform"] = platform_audit(nodes, report["inventory"], platform_groups)
         selected = select_addresses(nodes, report["inventory"], cfg.get("fabric_cidr"))
         report["selected"] = selected
         report["topology"] = {k: topology(v) for k, v in report["inventory"].items()}
@@ -918,7 +973,7 @@ def run(config, command):
                                        "scope": "HCCL_IF_IP 一致性；测试会显式设置网卡变量，服务必须使用同一 tested_environment"}
         if command == "inspect":
             return report
-        if alignment_errors:
+        if alignment_errors or checks["platform"]["block_active"]:
             return report
         ips = [x["ip"] for x in selected.values()]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(nodes)) as ex:
@@ -947,6 +1002,9 @@ def run(config, command):
                     checks[g["name"] + "/" + stage] = run_group(groupnodes, selected, cfg, stage)
                     if checks[g["name"] + "/" + stage]["status"] == "FAIL":
                         return report
+        if cfg.get("require_mc2") and checks["platform"]["status"] != "PASS":
+            checks["mc2"]["reason"] = "平台身份未核实，不选择或执行平台相关 MC2 测试"
+            return report
         for case in cfg.get("mc2_cases", []):
             group = next(g for g in cfg["groups"] if g["name"] == case["group"])
             groupnodes = [next(n for n in nodes if n["name"] == name) for name in group["nodes"]]

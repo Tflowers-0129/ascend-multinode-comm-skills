@@ -37,6 +37,14 @@ agent 负责从现场收集并填写，不强迫用户先整理完整算子清�
 
 缺少支持证据时保持未验证，先查目标安装包/官方匹配版本，不能随机尝试调用签名或自动切换通信算法。MC2 内核的 SHMEM/APACE/MTE 路径不是可互换实现；测试现有框架算子不需要新写一个“看起来等价”的内核。
 
+### A3 与 A5 的检查不能合并成一张通用支持表
+
+先读 [平台识别与分支检查](platform-a3-a5.md)。A3 检查具体型号、HCCS/实际网络与当前 API 支持的 rank 数；某个 API 的 2/4/8/16/32 等限制不能套给所有 MC2。A5 按具体 DT/PR 型号和版本查证，不由 A3 的成功案例外推。每个算子的 dtype/shape、量化、eager/图模式、通信模式与资源要求分别记录。
+
+`HCCL_BUFFSIZE`、`HCCL_OP_EXPANSION_MODE` 仅按当前部署和匹配版本继承；不自动填值、不用增大 buffer 或切 AIV 掩盖首因。`comm_mode` 是具体 API 参数，不能当成同名或相似环境变量的等价替换。P/D 有不同环境或算子配置时分别验证。
+
+`checks.platform` 只核实实时型号和通信组平台隔离。未知身份不执行 MC2；同组混合平台默认暂停主动测试。即使身份 PASS，仍必须审阅 `support_ref` 的真实来源，工具不会在线判断该字符串是否充分证明版本兼容。
+
 ## 3. 内置三类真实融合探针
 
 `preflight.py` 的 `mc2_cases` 为显式测试清单。可将 [算子清单模板](../examples/mc2-cases.json) 合入本次已核实的 cluster 配置；模板不是完整集群配置，`support_ref` 未替换会在连接前拒绝。节点/容器/卡数仍来自本次 nodes/groups，模板没有固定服务器。
@@ -53,7 +61,7 @@ python scripts/preflight.py check --config examples/cluster.local.json --out rep
 python scripts/preflight.py gate --report reports/check.json --scope mc2
 ```
 
-`inspect` 不调用 MC2。`check` 会先执行配置中的基础阶段，再顺序执行 MC2 cases；没有“普通 collective 失败后仍盲目占卡执行 MC2”的分支。case 失败后停止后续测试，未测 case 留为 UNVERIFIED。需要缩小故障复现范围时制作最小测试配置，不删除实际服务必需项来伪造完整验收。
+`inspect` 不调用 MC2。`check` 会先执行配置中的基础阶段，平台身份核实后再顺序执行 MC2 cases；没有“普通 collective 失败后仍盲目占卡执行 MC2”的分支。case 失败后停止后续测试，未测 case 留为 UNVERIFIED。`gate --scope mc2` 要求平台身份、基础通信及全部显式 case 通过。需要缩小故障复现范围时制作最小测试配置，不删除实际服务必需项来伪造完整验收。历史 `A5_MC2_REQUEST` / `A5_ADAPTER` 协议名保持兼容，A3 也使用它们，并非 A5 专用实现。
 
 builtin 每个 rank 的执行过程：
 
