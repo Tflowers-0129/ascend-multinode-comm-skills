@@ -10,6 +10,7 @@
 |---|---|
 | 让 Codex 按步骤做预检 | [SKILL.md](skills/ascend-multinode-comm/SKILL.md) |
 | 上传一套部署脚本，找影响建链的错误 | [脚本审计说明](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
+| 不上传，直接连接服务器查看部署脚本 | [直连指引与连接信息模板](skills/ascend-multinode-comm/references/remote-server-audit.md) |
 | 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
 | RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
 | 18/19 官方打流、8×8 逐卡、MC2 | [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
@@ -17,6 +18,14 @@
 | 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
 
 ## 快速使用
+
+### 不上传脚本，直接连接服务器审计
+
+可以直接要求技能：“连接以下节点，只读查看部署脚本和容器配置，分析影响建链的错误”。技能会引导收集每台机器的 IP/SSH 别名、端口、用户名、认证方式（密钥或密码）、脚本目录、容器名和节点角色；完整填写示例见 [服务器直连审计指引](skills/ascend-multinode-comm/references/remote-server-audit.md)。
+
+密码认证时，登录密码通过当前环境支持的安全凭据输入渠道提供，或由用户在自己的 SSH 终端输入；不要把密码、私钥正文贴进聊天或写进配置/报告。没有安全交互渠道时，先由用户准备可用 SSH 登录，不宣称已有工具可以自动接收密码。
+
+助手通过可用的 SSH/服务器连接能力读取现场入口、被引用配置、容器挂载和限定日志，再结合静态工具与语义分析，输出“节点/容器 + 远端文件行号 + 影响阶段 + 修改建议”。默认不运行部署脚本、不启动服务、不打流，也不把现场文件推送仓库。此入口是技能工作流，不是新增的批量密码采集程序；现有 `preflight.py` 使用 `BatchMode=yes`，不能直接用于交互密码登录或替代只读脚本审计。
 
 ### 上传脚本，只分析不执行
 
