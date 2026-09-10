@@ -8,6 +8,8 @@ MC2 单独验收，不能由 AllGather、AllReduce、AllToAll 或 `hccl_test -a 
 
 先读取各节点远端入口及其依赖、匹配版本的 vLLM-Ascend 配置消费代码和可用日志，记录“启用条件 → 实际分支 → 算子/API → TP/EP 等通信组”。预检没有 worker 时记录计划分支；排障时核对实际执行分支，不能把一个开关的存在当作已执行证据。
 
+需要官方参考脚本时，从 [官方配方索引](official-deployment-recipes.md) 选相应平台/模型；其中 FlashComm、AIV、图模式等只是定位消费代码的入口，不能直接认定启用了某个 MC2 API，也不因此跳过真实融合测试。
+
 | 算子族 | 需要区别的语义/资源 | 本库当前执行入口 |
 |---|---|---|
 | Matmul-AllReduce | 局部矩阵乘结果跨 rank 求和 | builtin：`matmul_all_reduce` → `torch_npu.npu_mm_all_reduce_base` |

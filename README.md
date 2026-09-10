@@ -21,6 +21,7 @@
 | 检测真正的 MC2 融合算子、MoE Dispatch/Combine | [MC2 算子级流程、内置探针与扩展契约](skills/ascend-multinode-comm/references/mc2-testing.md) |
 | 仿真能验证什么，什么不能放行 | [仿真与分级验收](skills/ascend-multinode-comm/references/simulation-and-gates.md) |
 | 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
+| 先从 vLLM-Ascend 官网查 A3/A5 部署脚本 | [官方配方、固定源码与审计重点](skills/ascend-multinode-comm/references/official-deployment-recipes.md) |
 | 提供远端成功部署脚本，提炼平台/版本经验 | [成功样本的选择、读取和归档](skills/ascend-multinode-comm/references/known-good-deployments.md) |
 
 ## 快速使用
@@ -135,7 +136,9 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 ## 需要提供很多成功脚本吗
 
-不需要先攒够数量，也不影响开始预检或排障。优先提供已有 A3/A5、混部/分离/池化、不同网络或 MC2 分支的代表案例；只换 IP 的大量脚本通常帮助有限。先给服务器连接信息、容器、工作目录和远端入口，最好附成功时间与真实请求日志路径，其余依赖/版本由 agent 在授权范围发现。
+不需要。先使用 [官方配方索引](skills/ascend-multinode-comm/references/official-deployment-recipes.md)：首批整理 A3/A5 多节点混部、Mooncake/GLM-5/DeepSeek-V4 PD 分离、Mooncake 与 Memcache 池化的 7 类主要配方，附官网、固定源码及实际脚本定位。基线是 v0.23.0 官方提交，具体平台和依赖边界逐项保留；A2 混部示例与旧 EP 教程单列参考，不冒充 A3/A5 现场成功。
+
+官方基线不能覆盖的变体，再补充已有代表案例即可。给服务器连接信息、容器、工作目录和远端入口，最好附成功时间与真实请求日志路径，其余依赖/版本由 agent 在授权范围发现；不要求用户先整理或上传整套脚本。
 
 样本用于提炼有条件的检查规则，不直接复制成默认模板。进程启动或 health=200 不代表 KV/MC2 已执行，历史成功也不保证当前环境可用。原始脚本/日志不自动推送仓库，密码不进聊天；具体字段与处理边界见 [成功部署样本指引](skills/ascend-multinode-comm/references/known-good-deployments.md)。
 
