@@ -10,7 +10,7 @@ skill-creator 的 quick_validate.py 校验通过，SKILL.md 及相对资源结�
 
 尚未实测：Linux SSH/docker 全链路、CPU TCPStore/Gloo、A5 HCCL 及 64 卡对矩阵、hccl_test/CANN 9.2.0、HCCL-VM、MC2、真实 PD/KV 池化适配器、光模块/UB/RoCE 物理拓扑。源码和说明都必须保持这一边界。
 
-已配置 GitHub Actions 的 Linux/Windows Python 3.10/3.12 标准库测试；本地通过不等于远端 CI 已通过。CI 不包含 NPU 测试。
+GitHub Actions 的 Linux/Windows × Python 3.10/3.12 标准库测试已通过，[运行记录](https://github.com/Tflowers-0129/ascend-multinode-comm-skills/actions/runs/34459676895) 对应实现提交 8d63150。CI 不包含 NPU 测试。
 
 ## 初版覆盖缺口
 

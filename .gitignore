@@ -6,4 +6,3 @@ reports/
 *.log
 .env
 hostfile.generated*
-
