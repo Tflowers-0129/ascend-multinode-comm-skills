@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "mode": "colocated",
-  "fabric_cidr": "172.27.8.0/24",
+  "fabric_cidr": null,
   "timeout_s": 90,
   "tcp_ports": [29671, 29672],
   "master_port": 29673,
   "stages": ["tcpstore", "gloo", "hccl"],
   "nodes": [
-    {"name": "node18", "ssh": "141.61.33.18", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": ["/home/tools/source_128p.sh"], "data_ip": "auto", "devices": [0, 1, 2, 3, 4, 5, 6, 7]},
-    {"name": "node19", "ssh": "141.61.33.19", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": ["/home/tools/source_128p.sh"], "data_ip": "auto", "devices": [0, 1, 2, 3, 4, 5, 6, 7]}
+    {"name": "node-a", "ssh": "REPLACE_SSH_NODE_A", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": [], "data_ip": "auto", "devices": [0]},
+    {"name": "node-b", "ssh": "REPLACE_SSH_NODE_B", "container": "REPLACE_CONTAINER", "python": "python3", "env_scripts": [], "data_ip": "auto", "devices": [0]}
   ],
-  "groups": [{"name": "model-domain", "nodes": ["node18", "node19"]}],
-  "environment": {"HCCL_ALGO": "level0:fullmesh"},
+  "groups": [{"name": "model-domain", "nodes": ["node-a", "node-b"]}],
+  "environment": {},
   "adapters": []
 }

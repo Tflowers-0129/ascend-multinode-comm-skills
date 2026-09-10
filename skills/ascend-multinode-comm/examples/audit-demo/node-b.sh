@@ -5,6 +5,6 @@ vllm serve /placeholder/model \
   --data-parallel-size 16 \
   --data-parallel-size-local 8 \
   --data-parallel-start-rank 0 \
-  --data-parallel-address 192.0.2.18 \
+  --data-parallel-address 192.0.2.10 \
   --data-parallel-rpc-port 16700 \
   --port 70000

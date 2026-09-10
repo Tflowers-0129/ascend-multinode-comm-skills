@@ -80,9 +80,9 @@ class ConfigTests(unittest.TestCase):
             p.validate_config(c)
 
     def test_choose_unique_not_management_suffix(self):
-        rows = {"a": inv(["141.61.33.19", "172.27.8.193"]), "b": inv(["141.61.33.21", "172.27.8.21"])}
-        out = p.select_addresses(cfg()["nodes"], rows, "172.27.8.0/24")
-        self.assertEqual(out["a"]["ip"], "172.27.8.193")
+        rows = {"a": inv(["198.51.100.34", "203.0.113.137"]), "b": inv(["198.51.100.80", "203.0.113.52"])}
+        out = p.select_addresses(cfg()["nodes"], rows, "203.0.113.0/24")
+        self.assertEqual(out["a"]["ip"], "203.0.113.137")
         with self.assertRaises(ValueError):
             p.select_addresses(cfg()["nodes"], rows)
 
@@ -148,6 +148,15 @@ class ConfigTests(unittest.TestCase):
         c["nodes"][0].update(ssh="local", container="worker")
         with self.assertRaises(ValueError):
             p.validate_config(c)
+
+    def test_example_targets_rejected_before_connection(self):
+        c = json.loads((SCRIPTS.parent / "examples/cluster.json").read_text(encoding="utf-8"))
+        for node in c["nodes"]:
+            node["container"] = "confirmed-container"
+        with patch.object(p, "call_remote") as remote:
+            with self.assertRaisesRegex(ValueError, "SSH"):
+                p.run(c, "inspect")
+            remote.assert_not_called()
 
 
 class GateTests(unittest.TestCase):
@@ -246,16 +255,16 @@ class SocketTests(unittest.TestCase):
 class BenchTests(unittest.TestCase):
     def test_linux_plan_generated_on_windows(self):
         args = SimpleNamespace(host=["a:8", "b:8"], directory="/usr/local/Ascend/tools/hccl_test",
-                               op="all2all", mpi="mpich", profile="historical-1g", aiv=True,
-                               check=False, fullmesh=True, source="/home/tools/source_128p.sh")
+                               op="all2all", mpi="mpich", profile="large-1g", aiv=True,
+                               check=False, fullmesh=True, source="/opt/test-env/setup.sh")
         out = b.plan(args, "hostfile")
         self.assertEqual(out["binary"], "/usr/local/Ascend/tools/hccl_test/bin/alltoall_test")
         self.assertIn("level0:fullmesh", out["shell"])
 
     def test_hostfile_variants(self):
-        hosts = b.parse_hosts(["141.61.33.18:8", "141.61.33.19:8"])
-        self.assertIn("141.61.33.19:8", b.hostfile(hosts, "mpich"))
-        self.assertIn("141.61.33.19 slots=8", b.hostfile(hosts, "openmpi"))
+        hosts = b.parse_hosts(["worker-red:4", "worker-blue:4", "worker-green:4"])
+        self.assertEqual(b.hostfile(hosts, "mpich"), "worker-red:4\nworker-blue:4\nworker-green:4\n")
+        self.assertIn("worker-green slots=4", b.hostfile(hosts, "openmpi"))
 
     def test_host_injection(self):
         with self.assertRaises(ValueError):
@@ -264,6 +273,40 @@ class BenchTests(unittest.TestCase):
     def test_card_count_mismatch(self):
         with self.assertRaises(ValueError):
             b.parse_hosts(["a:8", "b:16"])
+
+    def test_plan_uses_all_explicit_targets_and_sums_ranks(self):
+        args = SimpleNamespace(host=["worker-red:4", "worker-blue:4", "worker-green:4"],
+                               directory="/opt/cann/tools/hccl_test", source=None, inherit_env=True,
+                               op="allreduce", mpi="openmpi", profile="smoke", aiv=False, check=False, fullmesh=False)
+        out = b.plan(args, "ranks")
+        self.assertEqual(out["argv"][out["argv"].index("-n")+1], "12")
+        self.assertEqual([h for h, _ in out["hosts"]], ["worker-red", "worker-blue", "worker-green"])
+        self.assertEqual(out["environment_mode"], "inherit")
+        self.assertNotIn("source ", out["shell"])
+        self.assertNotIn("HCCL_ALGO", out["shell"])
+
+    def test_bench_cli_requires_target_environment_and_directory(self):
+        for argv in (
+            ["--host", "a:1", "--host", "b:1", "--mpi", "mpich", "--directory", "/opt/tests"],
+            ["--host", "a:1", "--host", "b:1", "--mpi", "mpich", "--inherit-env"],
+            ["--mpi", "mpich", "--inherit-env", "--directory", "/opt/tests"],
+        ):
+            with self.subTest(argv=argv):
+                result = subprocess.run([sys.executable, b.__file__, *argv], capture_output=True)
+                self.assertEqual(result.returncode, 2)
+
+    def test_plan_no_implicit_environment(self):
+        args = SimpleNamespace(host=["a:1", "b:1"], source=None)
+        with self.assertRaisesRegex(ValueError, "source"):
+            b.plan(args, "ranks")
+
+    def test_large_profile_legacy_alias_not_tied_to_nodes(self):
+        args = SimpleNamespace(host=["worker-orange:2", "worker-purple:2"],
+                               directory="/opt/tests", source="/opt/env.sh",
+                               op="all2all", mpi="mpich", profile="large-1g", aiv=True, check=False, fullmesh=False)
+        large = b.plan(args, "ranks")
+        args.profile = "historical-1g"
+        self.assertEqual(large["argv"], b.plan(args, "ranks")["argv"])
 
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@
 
 | 现象/证据 | 应检查什么 | 预检如何前移 |
 |---|---|---|
-| 19/21 的 16 个 TCP 连接均 ESTABLISHED，rank0 栈停在 getnameinfo / NSS DNS，另一侧 TCPStore 等待 | 容器内反向 DNS、hosts、NSS；不能直接判成端口没通 | getnameinfo 独立子进程硬超时，正反解析一致性，真实 TCPStore 注册/读写 |
+| 参与节点的多条 TCP 连接均 ESTABLISHED，rank0 栈停在 getnameinfo / NSS DNS，其他 rank 在 TCPStore 等待 | 容器内反向 DNS、hosts、NSS；不能直接判成端口没通 | getnameinfo 独立子进程硬超时，正反解析一致性，真实 TCPStore 注册/读写 |
 | 修复容器 hosts 后 store 继续初始化 | 检查业务地址与别名是否精确对应，必要时用容器 --add-host | 不自动修改系统 DNS，不拿 ping 通当解析正常 |
-| 管理 IP 为 141.*，19 的业务 IP 实际是 172.27.8.193 | 管理网与业务网不同，尾号不对应 | 自动发现 UP 网卡 + CIDR，拒绝多解，不拼接 .19 |
+| 管理 IP 与业务 IP 来自不同网段，地址尾号并不对应 | 管理网与业务网分别核查，不按节点标签拼业务地址 | 自动发现 UP 网卡 + 现场 CIDR，拒绝多解 |
 | 请求全失败但服务端没对应记录 | 代理环境、no_proxy、入口 URL、请求是否到了正确机器 | 仅记录代理是否存在而不泄露代理凭据；HTTP 验收显式绕过代理并核对路由 |
 | Mooncake 部分会话成功，另一些 EAGAIN/recv 超时 | 对照 session、rank、两端日志、元数据内容和动态端口，不直接下结论“整个网不通” | 双向数据校验 + 真实 connector/大小梯度；静态端口探针不冒充动态会话 |
 | 宿主机有 launcher，容器里找不到 | 挂载路径、入口 cwd、source 环境、文件权限 | 在目标 namespace 执行预检；env_scripts 路径必须是容器内实际路径 |
@@ -24,7 +24,7 @@
 2. 没有唯一业务 IP：提供业务 CIDR 或实际 IP，不选“第一张网卡”。
 3. TCP bind 失败：端口已占用或地址不存在，保留占用者，换维护窗口或空闲端口。
 4. TCP connect 成功、数据校验失败：看源地址、回程、连接被谁接受、报文完整性；不能直接算建链成功。
-5. DNS/TCPStore 失败：看每 rank 的 tcpstore_enter/ready 与解析耗时；16 个 ESTABLISHED 不是排除 DNS 的证据。
+5. DNS/TCPStore 失败：看每 rank 的 tcpstore_enter/ready 与解析耗时；已有连接均 ESTABLISHED 不是排除 DNS 的证据。
 6. Gloo 失败、store 成功：核对 peer 互联、动态回连、CPU 网卡和分组，不只检查 master。
 7. HCCL 初始化/首算子失败：拆 Host 控制面、Device 链路/拓扑、卡映射、版本、资源与算法；用 pairs 缩小到卡对。
 8. 小 HCCL 成功、大流量失败：加大小/次数，核对内存、链路错误与拥塞；小 TCP 不提供 RDMA MTU 或带宽保证。

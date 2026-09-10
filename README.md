@@ -15,7 +15,7 @@
 | 辅助核对部署脚本里的配置错误 | [脚本分析规则](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
 | 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
 | RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
-| 18/19 官方打流、8×8 逐卡、MC2 | [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
+| 对本次选定节点做官方打流、逐卡检测、MC2 验证 | [参数化 HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
 | 仿真能验证什么，什么不能放行 | [仿真与分级验收](skills/ascend-multinode-comm/references/simulation-and-gates.md) |
 | 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
 
@@ -70,6 +70,8 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 
 `inspect` 只有发现阶段，退出码通常为 2（未完整验证），不是执行错误。`check` 默认也保留 `model_e2e=UNVERIFIED`，基础通过后用 `gate --scope primitives` 查看基础范围；不能把它叫作服务完整验收。服务起来后需同镜像、同配置的真实请求以及相应 KV/MC2 适配器。
 
+`examples/cluster.json` 仅展示结构：按现场增删 nodes/groups，填写真实 SSH 目标、容器、工作目录和选定空闲卡；`[0]` 只是最小卡列表示例。SSH 占位符未替换会在连接前报错。示例不设置现场 CIDR、环境脚本路径或 fullmesh；根据当前证据填写 CIDR/地址、必要 env_scripts 和 environment，不能沿用文档中的节点身份。
+
 两机所有选定卡对：
 
 ```bash
@@ -87,7 +89,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 - `nodes[].ssh: local` 只支持当前 Linux 宿主执行，不进入容器；需要容器就使用明确 SSH 目标。现场诊断节点数不固定；现有主动探针单次 2～64 节点，`pairs` 一次两个节点仅为卡对隔离工具的限制。
 - CPU-only 存储/入口节点可设 `role: store` 或 `role: router`，`devices: []`，不加入模型 groups。
 - `devices` 是 torch 在当前可见设备掩码下的逻辑编号；可选 `physical_devices` 才是 hccn 查询编号。通过 npu-smi 映射核对，不能默认二者相同。
-- `data_ip: auto` 配合 `fabric_cidr` 主动找唯一 UP 网卡；多解/无解报错。不要由 141.* 地址尾号猜 172.* 地址。
+- `data_ip: auto` 配合现场确认的 `fabric_cidr` 主动找唯一 UP 网卡；多解/无解报错。不要由管理地址尾号猜业务地址。
 - `groups` 是待验收通信域列表。PD 分离中 P 与 D 分开定义，必要时为 TP/EP/PP 子域分别建配置；工具不会从模型参数自动推断所有子域。
 - `environment` 可设置 `HCCL_ALGO=level0:fullmesh` 等；不会默认写 HCCL 端口范围，避免覆盖版本行为。网卡/IP 自动按节点设置。
 - `tcp_ports` 是明确允许临时监听的测试端口，默认两个探针端口不覆盖所有生产端口。扩展为真实服务端口前确保没有在线服务占用；动态分配端口仍需真实 connector 验证。
@@ -100,7 +102,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 工具会创建短时监听器、NPU collective 和自有子进程，需要用户授权的节点、空闲卡与端口。它不改防火墙、路由、时钟、拓扑文件，不杀用户服务。SSH 中断后远端 watchdog 在超时上限内回收自有 worker；内核不可中断任务、MPI 外部远端 daemon 等不能承诺即时清理，需现场核验。
 
-报告可能包含 IP、文件摘要、进程错误和拓扑信息，`reports/`、`*.local.json`、日志不入库。源码中的 18/19 是用户提供的历史示例，不是本次实测结果；若转公开仓库，应先将现场地址替换成文档地址。
+报告可能包含 IP、文件摘要、进程错误和拓扑信息，`reports/`、`*.local.json`、日志不入库。发布示例仅用待填写占位符、通用节点名或测试用文档地址，不是预设待连接目标；执行目标必须来自用户本次清单。
 
 ## 安装技能与测试
 

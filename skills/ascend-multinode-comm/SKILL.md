@@ -43,7 +43,7 @@ manifest 可省略；没有明确分组时不跨文件断言 rank/端口冲突�
 1. 先读 [通信阶段](references/communication-stages.md)，确认混部/分离/池化、P/D/存储角色、实际 TP/PP/DP/EP 分组、镜像与 CANN 版本。不同 P、D 实例不要硬塞进一个生产 HCCL 通信域。
 2. 读 [拓扑与配置文件](references/topology-and-files.md)，区分管理 IP、Host 控制面 IP、NPU 数据面地址；RoCE/UB 是传输线索，fullmesh 是拓扑或算法线索，不能三选一。
 3. 从 `examples/cluster.json` 制作本地配置，保留自动探测，指定业务 CIDR 或明确 data_ip 消除多网卡歧义。先 `inspect`，再经用户确认空闲卡、端口与时间窗后 `check`。工具不自动登录历史地址、不复用聊天里的密码。
-4. 对每一个真实通信域运行 TCPStore、Gloo、HCCL；18/19 逐卡或官方打流见 [HCCL 检测](references/hccl-testing.md)。纯 TCP 不算 HCCL 通过，alltoall/aiv 不算 MC2 通过。
+4. 对每一个真实通信域运行 TCPStore、Gloo、HCCL；本次选定节点的逐卡或官方打流见 [HCCL 检测](references/hccl-testing.md)。目标来自当前清单，不复用任何历史地址。纯 TCP 不算 HCCL 通过，alltoall/aiv 不算 MC2 通过。
 5. 按实际 connector 执行 P→D KV 或池化适配器；未提供真实适配器则保持 `UNVERIFIED`。读 [现场故障](references/failure-playbook.md) 对照证据，不从错误码直接猜防火墙。
 6. 输出报告时必须列出实测/未测、测试时刻、版本、节点和卡映射、阶段失败与建议。需要仿真时读 [仿真与验收边界](references/simulation-and-gates.md)。
 
@@ -57,7 +57,7 @@ python scripts/preflight.py check --config examples/cluster.json --out reports/c
 python scripts/preflight.py gate --report reports/check.json --scope primitives
 ```
 
-`scripts/hccl_bench.py`：生成 MPI hostfile 与 hccl_test 计划；`--execute` 才运行。默认小流量，1G 历史配方必须显式选择。`scripts/preflight.py pairs`：对两台机器的显式可见卡列表做笛卡尔积，逐个两 rank HCCL collective，不把一个 16-rank collective 冒充 64 个独立卡对。
+`scripts/hccl_bench.py`：从重复的 `--host` 参数生成 MPI hostfile 并计算总 rank 数；必须指定实际 `--directory`，以及 `--source` 或 `--inherit-env`。`--execute` 才运行，默认小流量，1G 必须显式选择。`scripts/preflight.py pairs` 每次隔离一对选定节点，按各自卡列表做笛卡尔积；节点身份、卡数都来自本次配置，不把多 rank collective 冒充独立卡对覆盖。
 
 ## 关键判断
 

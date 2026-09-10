@@ -28,13 +28,13 @@
 | 故障与可观察范围 | 当前建链失败、服务仍挂住或已退出、已知报错/时间；默认围绕指定服务读取相关日志、网络/设备状态 |
 | 日志 / 版本 | 已知可提供；未知先从远端脚本重定向、当前容器和安装元数据发现，不以此阻塞第一轮排查 |
 
-可直接向用户给出下面的填写模板。示例 IP 为文档地址，并非真实待连接目标：
+可直接向用户给出下面的填写模板，目标由本次信息填写，不预置地址：
 
 ```text
 任务：以下服务器的服务当前建链失败，请直接现场排查
 服务器列表：按实际数量逐项提供，每项配置可以不同
 节点 node-a：
-  IP / SSH 别名：192.0.2.18
+  IP / SSH 别名：填写本次目标
   SSH 端口：22
   用户名：audit
   认证方式：密码（也可填写“已有 SSH 密钥/别名”）
@@ -61,14 +61,14 @@ IP、用户名、目录可正常提供；密码和私钥不进入这份模板。
 4. 保留 SSH 主机身份校验。首次连接由用户从可信渠道核对指纹并完成信任配置；密钥变化时停止并核实，不设置 `StrictHostKeyChecking=no`，不删除 known_hosts 条目绕过校验。
 5. 认证失败、权限不足或目标身份不符时停止该节点的采集，报告具体障碍。不自动改用 root、sudo、修改账号/SSH 配置、开启端口转发或开放防火墙。其他已经授权且可访问的节点可继续只读分析。
 
-以下仅演示身份核验，实际地址/账号来自用户。先完成主机指纹确认；不要直接照抄示例地址连接。
+以下仅演示身份核验。先完成主机指纹确认，SSH_TARGET 填写本次确认的 user@host 或已有 SSH 别名，SSH_PORT 填写实际端口（不填使用标准 22）；缺少目标时直接提示，不连接任何默认主机。
 
 ```bash
 # 已配置密钥/agent；失败不弹出密码提示。
-ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=8 -p 22 audit@192.0.2.18 id
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=8 -p "${SSH_PORT:-22}" "${SSH_TARGET:?请填写本次确认的SSH目标}" id
 
 # 密码认证：仅在用户可亲自输入的安全交互终端运行；密码不是命令参数。
-ssh -T -o BatchMode=no -o NumberOfPasswordPrompts=1 -o StrictHostKeyChecking=yes -o ConnectTimeout=8 -p 22 audit@192.0.2.18 id
+ssh -T -o BatchMode=no -o NumberOfPasswordPrompts=1 -o StrictHostKeyChecking=yes -o ConnectTimeout=8 -p "${SSH_PORT:-22}" "${SSH_TARGET:?请填写本次确认的SSH目标}" id
 ```
 
 `BatchMode=yes` 会禁用密码提示；不能在仍使用该选项时声称可以接受密码。一次身份核验成功也不意味着另一个 SSH 客户端/进程自动复用认证，应确认助手实际使用的会话可访问。[OpenSSH 认证交互与主机校验说明](https://man.openbsd.org/ssh_config)

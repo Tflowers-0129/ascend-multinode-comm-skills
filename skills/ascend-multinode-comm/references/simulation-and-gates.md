@@ -39,11 +39,13 @@ VM 使用的 rootinfo/topo 文件可能是虚拟拓扑入口；这与用户现�
 {
   "require_mc2": true,
   "adapters": [
-    {"stage":"mc2", "node":"node18", "argv":["python3","/workspace/tests/actual_mc2.py"]},
-    {"stage":"model_e2e", "node":"node18", "argv":["python3","/workspace/tests/actual_request.py"]}
+    {"stage":"mc2", "node":"node-a", "argv":["python3","/workspace/tests/actual_mc2.py"]},
+    {"stage":"model_e2e", "node":"node-a", "argv":["python3","/workspace/tests/actual_request.py"]}
   ]
 }
 ```
+
+上例 node-a 只是通用节点标识，使用时必须替换为本次 nodes 中实际选定的名称，不指定固定执行主机。
 
 适配器需以非零 rc 表示失败；成功必须输出一行 `A5_ADAPTER ` 加 JSON。下面只展示数据格式，不能复制固定 true 作为测试实现：
 

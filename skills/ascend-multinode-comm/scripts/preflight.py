@@ -426,6 +426,8 @@ def validate_config(cfg):
     if len(set(names)) != len(names):
         raise ValueError("节点名重复")
     for n in nodes:
+        if "REPLACE" in n["ssh"]:
+            raise ValueError("请用本次确认的 SSH 目标替换示例占位符")
         if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@:-]*", n["ssh"]):
             raise ValueError("SSH 目标格式无效")
         if "REPLACE" in n.get("container", ""):
