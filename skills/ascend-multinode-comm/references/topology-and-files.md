@@ -13,6 +13,8 @@
 
 ## 探测步骤与输出
 
+以下是经授权主动预检的步骤。排查现有建链故障时，先按 [现场流程](remote-server-audit.md) 直接读取原 worker/容器与网络设备状态，保留原环境；不要为了取证先 source 环境或覆盖测试网卡。只有需要受控复现且资源已确认，才运行 inspect/check/pairs。
+
 1. 宿主机和容器分别运行 inspect，比较地址、路由、设备可见性、拓扑文件 hash/挂载来源、CANN/torch 版本。容器 bridge/NAT 与 host 网络需区分。
 2. 从 UP 网卡选业务 IP，记录网卡名和 MTU；有多块可行网卡则要求 CIDR 或明确 IP。到每个 peer 的实际源路由与反向路径仍需核对，不能只验证 master。
 3. 查询 npu-smi mapping。用户提供 physical_devices 时采集每张物理卡的 hccn IP、link、net_health、LLDP；没有映射不盲目对编号 0~7 做配置操作。

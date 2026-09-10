@@ -430,6 +430,14 @@ def validate_config(cfg):
             raise ValueError("SSH 目标格式无效")
         if "REPLACE" in n.get("container", ""):
             raise ValueError("请填写真实容器名称，宿主机检测可移除 container 字段")
+        if "workdir" in n and (not isinstance(n["workdir"], str) or not n["workdir"].startswith("/") or
+                                any(c in n["workdir"] for c in "\x00\r\n")):
+            raise ValueError("workdir 必须是目标运行环境内的 Linux 绝对路径")
+        if "container_user" in n and (not n.get("container") or not isinstance(n["container_user"], str) or
+                not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?", n["container_user"])):
+            raise ValueError("container_user 仅适用于容器，应为已核实的用户名/UID（可带组名/GID）")
+        if n["ssh"] == "local" and n.get("container"):
+            raise ValueError("local 分支不进入容器；容器检测请使用明确的 SSH 目标")
         for field in ("devices", "physical_devices"):
             devs = n.get(field, [])
             if (field == "devices" and not devs and n.get("role", "worker") not in {"store", "router"}) or len(set(devs)) != len(devs) or any(type(x) is not int or not 0 <= x < 64 for x in devs):
@@ -467,13 +475,19 @@ def validate_config(cfg):
 
 def remote_argv(node, payload, env):
     cmd = [node.get("python", "python3"), "-u", "-c", BOOT, "--agent", encode(payload)]
-    shell = " && ".join(["source " + shlex.quote(x) for x in node.get("env_scripts", [])] +
+    shell = " && ".join((["cd -- " + shlex.quote(node["workdir"])] if node.get("workdir") else []) +
+                         ["source " + shlex.quote(x) for x in node.get("env_scripts", [])] +
                          ["exec env " + " ".join(shlex.quote(k + "=" + str(v)) for k, v in env.items()) + " " + shlex.join(cmd)])
     if node["ssh"] == "local":
         return ["bash", "-c", shell]
     runtime = ["bash", "-c", shell]
     if node.get("container"):
-        runtime = ["docker", "exec", "-i", node["container"]] + runtime
+        options = ["docker", "exec", "-i"]
+        if node.get("workdir"):
+            options += ["--workdir", node["workdir"]]
+        if node.get("container_user"):
+            options += ["--user", node["container_user"]]
+        runtime = options + [node["container"]] + runtime
     return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", "--", node["ssh"], shlex.join(runtime)]
 

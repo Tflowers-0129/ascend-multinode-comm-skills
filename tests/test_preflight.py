@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import queue
+import shlex
 import socket
 import subprocess
 import sys
@@ -99,6 +100,54 @@ class ConfigTests(unittest.TestCase):
                             {"action": "inventory"}, {"HCCL_ALGO": "level0:fullmesh"})
         self.assertIn("BatchMode=yes", cmd)
         self.assertIn("docker exec -i", cmd[-1])
+
+    def test_remote_container_context_round_trip(self):
+        node = dict(ssh="audit@node", container="worker", workdir="/srv/owner's deployment",
+                    container_user="1000:1000", env_scripts=["./env.sh"])
+        c = cfg()
+        c["nodes"][0].update(node)
+        p.validate_config(c)
+        argv = p.remote_argv(node, {"action": "inventory"}, {})
+        runtime = shlex.split(argv[-1])
+        self.assertEqual(runtime[:8], ["docker", "exec", "-i", "--workdir", node["workdir"], "--user", "1000:1000", "worker"])
+        self.assertEqual(runtime[8:10], ["bash", "-c"])
+        commands = runtime[10].split(" && ")
+        self.assertEqual(shlex.split(commands[0]), ["cd", "--", node["workdir"]])
+        self.assertEqual(shlex.split(commands[1]), ["source", "./env.sh"])
+
+    def test_host_context_precedes_source(self):
+        argv = p.remote_argv(dict(ssh="local", workdir="/srv/run", env_scripts=["env.sh"]),
+                             {"action": "inventory"}, {})
+        self.assertEqual(argv[:2], ["bash", "-c"])
+        self.assertTrue(argv[2].startswith("cd -- /srv/run && source env.sh && exec env "))
+
+    def test_invalid_workdir_rejected(self):
+        for value in ("relative", "", "C:\\deploy", "/srv/\nunsafe", "/srv/\x00", None):
+            with self.subTest(value=value):
+                c = cfg()
+                c["nodes"][0]["workdir"] = value
+                with self.assertRaises(ValueError):
+                    p.validate_config(c)
+
+    def test_invalid_container_user_rejected(self):
+        for value in ("--privileged", "user;bad", "", None):
+            with self.subTest(value=value):
+                c = cfg()
+                c["nodes"][0].update(container="worker", container_user=value)
+                with self.assertRaises(ValueError):
+                    p.validate_config(c)
+
+    def test_container_user_requires_container(self):
+        c = cfg()
+        c["nodes"][0]["container_user"] = "1000"
+        with self.assertRaises(ValueError):
+            p.validate_config(c)
+
+    def test_local_cannot_silently_ignore_container(self):
+        c = cfg()
+        c["nodes"][0].update(ssh="local", container="worker")
+        with self.assertRaises(ValueError):
+            p.validate_config(c)
 
 
 class GateTests(unittest.TestCase):

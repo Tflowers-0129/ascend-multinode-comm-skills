@@ -1,6 +1,8 @@
-# Ascend 多机通信预检 Skills
+# Ascend 多机现场建链排障与预检 Skills
 
-面向 A5 / vLLM-Ascend，把多机服务启动失败前移到分层预检：发现网卡与 IP，区分 Host 控制面和 NPU 数据面，测 DNS、TCPStore、Gloo、HCCL 与逐卡通信，保留官方 hccl_test 配方，并为 PD/KV 池化和 MC2 留出真实版本验收入口。
+面向 A5 / vLLM-Ascend，主场景是：用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，服务当前建链失败，由技能直接连接现场排查。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
+
+从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再按需要进行 DNS/TCPStore/Gloo/HCCL、逐卡或 PD/KV 定向验证。也保留服务启动前预检、官方 hccl_test 配方、MC2/KV 验收接口，以及辅助静态脚本分析。
 
 这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。本次开发机为 Windows、无 NPU；本机测试结果见 [验证记录](docs/validation.md)。A5 上板、真实 Gloo/HCCL、MC2、KV 数据通路仍需现场验收。
 
@@ -8,9 +10,9 @@
 
 | 要解决的问题 | 入口 |
 |---|---|
-| 让 Codex 按步骤做预检 | [SKILL.md](skills/ascend-multinode-comm/SKILL.md) |
-| 上传一套部署脚本，找影响建链的错误 | [脚本审计说明](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
-| 不上传，直接连接服务器查看部署脚本 | [直连指引与连接信息模板](skills/ascend-multinode-comm/references/remote-server-audit.md) |
+| 让 Codex 现场排查建链失败 | [SKILL.md](skills/ascend-multinode-comm/SKILL.md) |
+| 给出服务器、容器、工作目录、远端脚本后开始排查 | [主流程与连接信息模板](skills/ascend-multinode-comm/references/remote-server-audit.md) |
+| 辅助核对部署脚本里的配置错误 | [脚本分析规则](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
 | 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
 | RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
 | 18/19 官方打流、8×8 逐卡、MC2 | [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
@@ -19,17 +21,30 @@
 
 ## 快速使用
 
-### 不上传脚本，直接连接服务器审计
+### 默认场景：指定服务器上的服务正在建链失败
 
-可以直接要求技能：“连接以下节点，只读查看部署脚本和容器配置，分析影响建链的错误”。技能会引导收集每台机器的 IP/SSH 别名、端口、用户名、认证方式（密钥或密码）、脚本目录、容器名和节点角色；完整填写示例见 [服务器直连审计指引](skills/ascend-multinode-comm/references/remote-server-audit.md)。
+直接这样描述即可，节点按实际数量列出，共用设置和节点差异分别说明：
+
+```text
+这些服务器上的服务目前建链失败，请直接连接现场排查。
+服务器：逐项提供 IP/SSH 别名、端口、用户名、认证方式。
+各节点容器：xxx；工作目录：xxx；服务部署脚本：xxx。
+工作目录和脚本都在服务器的指定容器内；相对脚本路径相对于该工作目录。
+错误/日志位置：已知则提供，未知请从当前容器和远端脚本查找。
+请先保留现有故障现场，修改、重启或新增占卡测试前说明影响并确认。
+```
+
+角色、TP/DP/EP 分组、日志重定向和版本等优先由技能从远端发现，不要求用户先制作完整配置清单。认证和更多字段见 [现场排障指引](skills/ascend-multinode-comm/references/remote-server-audit.md)。
 
 密码认证时，登录密码通过当前环境支持的安全凭据输入渠道提供，或由用户在自己的 SSH 终端输入；不要把密码、私钥正文贴进聊天或写进配置/报告。没有安全交互渠道时，先由用户准备可用 SSH 登录，不宣称已有工具可以自动接收密码。
 
-助手通过可用的 SSH/服务器连接能力读取现场入口、被引用配置、容器挂载和限定日志，再结合静态工具与语义分析，输出“节点/容器 + 远端文件行号 + 影响阶段 + 修改建议”。默认不运行部署脚本、不启动服务、不打流，也不把现场文件推送仓库。此入口是技能工作流，不是新增的批量密码采集程序；现有 `preflight.py` 使用 `BatchMode=yes`，不能直接用于交互密码登录或替代只读脚本审计。
+技能的工作顺序是：连接并核实各节点执行上下文 → 关联现有日志的最后成功/首个失败点 → 对照脚本与实际 worker、网络/设备状态 → 选择最小现场验证 → 给出原因、证据、最小修复和复测建议。不会拿到远端路径后要求先下载上传，也不会以静态扫描或一份通用检查清单代替实际排查。
 
-### 上传脚本，只分析不执行
+普通取证不修改配置、重启或重跑部署脚本。新增监听器、通信测试进程和 NPU 打流需明确空闲资源与授权；用户明确只读时保持只读。整个流程使用可用的 SSH/服务器连接能力，现有 `preflight.py` 则服务于后续受控测试，其 `BatchMode=yes` 不支持直接弹出密码输入。
 
-直接把多节点入口和配套配置交给技能，助手会先还原各节点/角色、调用链、变量生效顺序与通信域，指出具体文件行号、影响阶段、成立条件和修复建议。支持助手阅读 shell/Python/Compose/K8s 等；内置工具自动解析静态 shell 子集，复杂部分由助手继续分析。
+### 辅助场景：明确只分析本地附件或已采集文本
+
+只有用户选择本地分析，或远端取证已生成必要本地文本时，才使用这个入口。它不是现场排障的前置条件。助手核对调用链、变量生效顺序与通信域，指出文件行号、影响阶段、成立条件和修复建议；工具自动解析静态 shell 子集，复杂 shell/Python/Compose/K8s 由助手继续分析。
 
 ```bash
 cd skills/ascend-multinode-comm
@@ -39,14 +54,14 @@ python scripts/audit_deployment.py --root examples/audit-demo \
 
 此样例故意包含错误，预期退出 1，并报告重复 HCCL_IP、DP 区间重叠、非法端口。工具生成 JSON + 中文 Markdown。审计真实上传目录时替换 root；manifest 可省略，分组关系明确后再做跨节点比较。工具不执行上传脚本，静态无报错也不会给出建链 PASS。报告和真实上传内容不要提交仓库。
 
-### 在目标环境主动检测
+### 启动前预检，或现场排障需要的受控验证
 
 控制端：Python 3.10+、OpenSSH。被测环境：Linux、bash、Python 3.10+、iproute2；collective 需要当前服务使用的 torch/torch_npu/CANN。无需在控制端安装 torch。
 
 ```bash
 cd skills/ascend-multinode-comm
 cp examples/cluster.json examples/cluster.local.json
-# 编辑真实容器名、可见逻辑卡列表、环境脚本路径、业务 CIDR、空闲测试端口。
+# 编辑真实容器名、workdir、可选 container_user、卡列表、环境脚本、业务 CIDR 和空闲测试端口。
 # env_scripts 在目标容器内 source；宿主机上的路径不自动出现在容器里。
 python scripts/preflight.py inspect --config examples/cluster.local.json --out reports/inventory.json
 python scripts/preflight.py check --config examples/cluster.local.json --out reports/check.json
@@ -68,6 +83,8 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 - `nodes[].ssh` 只用于管理入口，可用已有 SSH config 别名。没有密码字段，不放宽 host key 校验；首次主机认证由用户完成。
 - `nodes[].container` 不填即宿主机；工具不新建容器。`env_scripts` 在该运行环境内生效。
+- `nodes[].workdir` 是该运行环境内的 Linux 绝对目录，在 source 和探针启动前生效。`container_user` 可指定已核实的容器服务用户名/UID（可带组），仅用于有 container 的节点；不自动切到 root。未设置时保留原来的执行上下文，不能声称已与 worker 对齐。
+- `nodes[].ssh: local` 只支持当前 Linux 宿主执行，不进入容器；需要容器就使用明确 SSH 目标。现场诊断节点数不固定；现有主动探针单次 2～64 节点，`pairs` 一次两个节点仅为卡对隔离工具的限制。
 - CPU-only 存储/入口节点可设 `role: store` 或 `role: router`，`devices: []`，不加入模型 groups。
 - `devices` 是 torch 在当前可见设备掩码下的逻辑编号；可选 `physical_devices` 才是 hccn 查询编号。通过 npu-smi 映射核对，不能默认二者相同。
 - `data_ip: auto` 配合 `fabric_cidr` 主动找唯一 UP 网卡；多解/无解报错。不要由 141.* 地址尾号猜 172.* 地址。
