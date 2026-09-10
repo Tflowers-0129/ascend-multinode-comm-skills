@@ -12,6 +12,8 @@
 
 ## 首批主要配方
 
+想直接看单机、双机、多机的 DP/TP 布局与现场请求，先读 [六类场景示例](scenario-examples.md)。下面保留完整来源定位；示例中的扩容算例不标为官方已验证规模。
+
 下列脚本多数嵌在官网文档代码块中，不是仓库里另有一个同名 `.sh` 文件。打开“固定源码”按章节/tab 读取整套脚本；不要凭文档中写了文件名就拼出不存在的下载地址。
 
 | 编号 / 平台与场景 | 官方入口与固定源码定位 | 需要一起读取的配置 |
@@ -23,6 +25,9 @@
 | R05：A5 / 950DT，DeepSeek-V4-Pro PD 分离 | [官网](https://docs.vllm.ai/projects/ascend/en/v0.23.0/tutorials/models/DeepSeek-V4-Pro.html)；[源码 §5.2.3](https://github.com/vllm-project/vllm-ascend/blob/5cb98caaadeff42b5b62b996e34bb2aaa29d20fd/docs/source/tutorials/models/DeepSeek-V4-Pro.md#L1333) | launcher、P/D 模板、MooncakeHybridConnector、HiXLEP 与转发配置；逻辑 P/D 实例数不等于物理服务器数 |
 | R06：A3 / Ascend 950，Mooncake 池化，含混部和 PD 分离 | [KV Pool 官网](https://docs.vllm.ai/projects/ascend/en/v0.23.0/user_guide/feature_guide/kv_pool.html)；[固定源码 Mooncake 部分](https://github.com/vllm-project/vllm-ascend/blob/5cb98caaadeff42b5b62b996e34bb2aaa29d20fd/docs/source/user_guide/feature_guide/kv_pool.md#L53) | `mooncake.json`、master、`multi_producer.sh` / `multi_consumer.sh` 或 `pd_mix.sh`；平台/传输分支分别选，PD+池化使用 MultiConnector |
 | R07：A3，Memcache 池化，含混部和 PD 分离 | [KV Pool 官网](https://docs.vllm.ai/projects/ascend/en/v0.23.0/user_guide/feature_guide/kv_pool.html)；[固定源码 Memcache 部分](https://github.com/vllm-project/vllm-ascend/blob/5cb98caaadeff42b5b62b996e34bb2aaa29d20fd/docs/source/user_guide/feature_guide/kv_pool.md#L479) | `mmc-meta.conf`、`mmc-local.conf`、MetaService、`run_prefill.sh/run_decode.sh` 或 `Run_pd_mix.sh`；独立 MemCache 进程部署另读对应小节 |
+| R08：A3 / 950DT，单机混部 | [DeepSeek-V4-Flash 官网](https://docs.vllm.ai/projects/ascend/en/v0.23.0/tutorials/models/DeepSeek-V4-Flash.html)；[源码 §5.1 A3](https://github.com/vllm-project/vllm-ascend/blob/5cb98caaadeff42b5b62b996e34bb2aaa29d20fd/docs/source/tutorials/models/DeepSeek-V4-Flash.md#L233) / [950DT](https://github.com/vllm-project/vllm-ascend/blob/5cb98caaadeff42b5b62b996e34bb2aaa29d20fd/docs/source/tutorials/models/DeepSeek-V4-Flash.md#L280) | 平台对应权重/量化、DP/TP/EP、设备掩码、图模式；不同平台 tab 不混抄 |
+| R09：950DT，单机 PD 分离 | [DeepSeek-V4-Flash 官网](https://docs.vllm.ai/projects/ascend/en/v0.23.0/tutorials/models/DeepSeek-V4-Flash.html)；[源码 §5.2.3](https://github.com/vllm-project/vllm-ascend/blob/5cb98caaadeff42b5b62b996e34bb2aaa29d20fd/docs/source/tutorials/models/DeepSeek-V4-Flash.md#L931) | `run_prefill.sh` / `run_decode.sh`、代理、独立设备与端口、MooncakeHybridConnector、HiXLEP；不能因上级标题 Multi-Node 就算跨机证据 |
+| R10：A3，双机 PD 分离 | [DeepSeek-V4-Flash 官网](https://docs.vllm.ai/projects/ascend/en/v0.23.0/tutorials/models/DeepSeek-V4-Flash.html)；[源码 §5.2.1](https://github.com/vllm-project/vllm-ascend/blob/5cb98caaadeff42b5b62b996e34bb2aaa29d20fd/docs/source/tutorials/models/DeepSeek-V4-Flash.md#L371) | launcher、两侧不同 `run_dp_template.sh`、P/D 非对称并行描述、完整 API 端点与代理；不外推为任意 connector 均支持 |
 
 本表的 A5 模型配方明确是 950DT，不外推为 950PR；R06 的具体 950 型号/依赖仍需单独核对。R07 固定源码的启动分支只列 A2/A3，不能套用后来 main 页的 A5 分支后仍称“v0.23.0 原配方”。没有匹配的组合时记录缺口，继续查对应版本官方资料，再按需补充现场样本。
 

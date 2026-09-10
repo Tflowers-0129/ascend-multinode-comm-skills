@@ -1,9 +1,9 @@
 ---
 name: ascend-multinode-comm
-description: 面向 Ascend A3/A5 与 vLLM-Ascend 的多机通信预检与现场排障。用户提供服务器连接信息、容器、工作目录和远端部署脚本后，按实时平台/版本及 HCCS/RoCE/UB 路径检查 TCPStore/Gloo/HCCL、MC2 与 PD/KV 通信；建链失败时结合日志、实际进程和网络设备状态定位原因。预检与排障并列，支持辅助脚本分析与成功案例提炼；脚本默认在服务器，不要求上传，不绑定特定 agent。
+description: 面向 Ascend A3/A5 与 vLLM-Ascend 的单机/多机通信预检与现场排障，含混部、多 DP 和 PD 分离示例。用户提供服务器连接信息、容器、工作目录和远端部署脚本后，按实时平台/版本及 HCCS/RoCE/UB 路径检查 TCPStore/Gloo/HCCL、MC2 与 PD/KV 通信；建链失败时结合日志、实际进程和网络设备状态定位原因。预检与排障并列，支持辅助脚本分析与成功案例提炼；脚本默认在服务器，不要求上传，不绑定特定 agent。
 ---
 
-# 昇腾多机通信预检与现场排障
+# 昇腾单机/多机通信预检与现场排障
 
 目标：在用户指定服务器上，启动前发现影响建链的配置与通信问题，或在建链失败后定位到节点、容器、阶段、rank、链路与配置来源。两者按用户意图选择，不默认已经发生故障。节点数量与通信分组来自现场，不限定为两台，也不默认所有节点配置相同。
 
@@ -17,6 +17,7 @@ description: 面向 Ascend A3/A5 与 vLLM-Ascend 的多机通信预检与现场�
 | 这些服务器、容器、工作目录和部署脚本，当前建链失败，请排查 | 按下方“现场建链排障”流程及 [现场排障指引](references/remote-server-audit.md)，读取远端脚本、日志和实际状态，按失败阶段定位 |
 | 明确只分析本地附件、不连接服务器 | 辅助静态审计；不能据此诊断当前现场状态 |
 | 先找官网部署脚本、建立 A3/A5 参考基线 | 读 [官方配方索引](references/official-deployment-recipes.md)，按平台/模式/版本选择官网代码块和固定源码；无需先索要现场成功脚本，不执行部署 |
+| 给出单机混部/PD 分离、双机或多机多 DP/PD 分离示例 | 读 [六类场景示例](references/scenario-examples.md)，提供对应拓扑、官方脚本入口及现场请求；区分官方配方、扩容算例和工具限制，不执行部署 |
 | 给出远端已成功部署的脚本，希望提炼检查规则 | 按 [成功样本指引](references/known-good-deployments.md) 只读提取有版本和验收证据的规则，不重跑服务，不把原始内容推送仓库 |
 
 用户在服务器场景中“提供脚本”即提供远端路径；不要要求先下载、上传、复制到本地，或先制作审计 manifest。若给出容器，工作目录默认按该容器内路径理解，脚本相对路径相对于该目录；核查实际存在性，必要时澄清宿主/容器边界，不擅自换一个同名文件。
@@ -29,9 +30,9 @@ description: 面向 Ascend A3/A5 与 vLLM-Ascend 的多机通信预检与现场�
 
 1. 连接并核实每个目标的容器、服务用户、工作目录及远端脚本，读取入口/source 依赖而不执行部署脚本。按 [脚本分析规则](references/deployment-script-audit.md) 还原计划配置，并读 [通信阶段](references/communication-stages.md)，确认混部/分离/池化、P/D/存储角色、实际 TP/PP/DP/EP 分组、镜像与 CANN 版本。不同 P、D 实例不要硬塞进一个生产 HCCL 通信域。
 2. 读 [A3/A5 平台分支](references/platform-a3-a5.md)，先核实实时型号、软件/镜像与卡映射，再核对计划网卡/IP、路由、端口占用、设备可见性及容器挂载。平台身份不等于版本/算子支持；未知不猜，同一通信组不混合平台试错。服务尚未启动时，没有 worker、故障日志或业务监听是正常前提，不判建链失败；计划参数与已实测状态分别记录。容器尚未运行或环境不齐则报告检查缺口，不擅自创建/启动容器或服务。
-3. 读 [拓扑与配置文件](references/topology-and-files.md)，区分管理 IP、Host 控制面 IP、NPU 数据面地址；HCCS/RoCE/UB 与 fullmesh 属于不同维度，不互斥。A3 HCCS 按 vNIC/superpod/SDID 路径查证，不能套成 A5 UB 检查。从 `examples/cluster.json` 制作本地测试配置，以业务 CIDR 或明确 data_ip 消除多网卡歧义；目标与卡列表来自本次信息。先审阅必要 env_scripts，再运行 `inspect`；不得将部署脚本当成环境初始化脚本。
-4. 确认空闲卡、允许临时监听的端口与时间窗后，以独立测试进程运行 `check`，按实际通信域验证 DNS/TCP、TCPStore、Gloo、HCCL。不能向未启动的生产端口建连失败就判网络不通，也不能占用线上通信组。逐卡或官方打流见 [HCCL 检测](references/hccl-testing.md)，纯 TCP 不算 HCCL 通过，alltoall/aiv 不算 MC2 通过。
-5. 读 [MC2 算子级检测](references/mc2-testing.md)，从实际配置/代码识别 Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter、AllToAll 融合、MoE Dispatch/Combine 或 Fused MoE 等所用路径，分别建立 `mc2_cases`。内置三类非量化 eager 探针不能替代量化/图模式/MoE；其余由 agent 在现场定位或补齐版本化测试。P→D KV 与池化另用实际 connector 适配器，不与 MC2 合并为同一验收项。缺失时保持 `UNVERIFIED`；预检不自动授权拉起完整模型服务。
+3. 读 [拓扑与配置文件](references/topology-and-files.md)，区分管理 IP、Host 控制面 IP、NPU 数据面地址；HCCS/RoCE/UB 与 fullmesh 属于不同维度，不互斥。A3 HCCS 按 vNIC/superpod/SDID 路径查证，不能套成 A5 UB 检查。多机工具适用时从 `examples/cluster.json` 制作本地测试配置，以业务 CIDR 或明确 data_ip 消除多网卡歧义；目标与卡列表来自本次信息。先审阅必要 env_scripts，再运行 `inspect`；不得将部署脚本当成环境初始化脚本。单机或同宿主多实例按 [场景示例的工具边界](references/scenario-examples.md#从示例到真实检测不要跨级放行) 选择现场检查，不伪造节点绕过 CLI 限制。
+4. 确认空闲卡、允许临时监听的端口与时间窗后，以独立测试进程运行适用的 `check` 或现场版本化探针，按实际通信域验证 DNS/TCP、TCPStore、Gloo、HCCL。不能向未启动的生产端口建连失败就判网络不通，也不能占用线上通信组。逐卡或官方打流见 [HCCL 检测](references/hccl-testing.md)，纯 TCP 不算 HCCL 通过，alltoall/aiv 不算 MC2 通过。
+5. 读 [MC2 算子级检测](references/mc2-testing.md)，从实际配置/代码识别 Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter、AllToAll 融合、MoE Dispatch/Combine 或 Fused MoE 等所用路径；符合多机工具范围时分别建立 `mc2_cases`，单机算子按现场版本化测试另记证据，不填跨宿主 PASS。内置三类非量化 eager 探针不能替代量化/图模式/MoE；其余由 agent 在现场定位或补齐版本化测试。P→D KV 与池化另用实际 connector 适配器，不与 MC2 合并为同一验收项。缺失时保持 `UNVERIFIED`；预检不自动授权拉起完整模型服务。
 6. 输出已确认配置错误、条件风险、各阶段实测/未测、时刻、版本、节点/卡映射与后续动作。不把没有现存故障判成全部通过，不承诺预检通过就保证服务启动。需要仿真或分级放行时读 [仿真与验收边界](references/simulation-and-gates.md)。
 
 ## 现场建链排障
@@ -56,6 +57,8 @@ manifest 可省略；没有明确分组时不跨文件断言 rank/端口冲突�
 ## 工具
 
 `scripts/preflight.py`：Python 标准库控制器；通过 SSH 在宿主机或现有容器内运行同一版本的探针。探针代码通过 stdin 传输，不改远端安装、不写拓扑文件。主动检测使用短时监听器和进程，远端 watchdog 在对应命名空间内限制生命周期。
+
+当前 CLI 配置接受 2～64 节点；单机检查由 agent 按现场版本选择探针，未提供单节点一键检测。现有 MC2 验收要求真实跨宿主证据，同机多容器不能替代；多 DP 的生产 TP/EP 子域也需显式还原，详见 [示例与工具覆盖边界](references/scenario-examples.md)。
 
 ```bash
 python scripts/preflight.py inspect --config examples/cluster.json --out reports/inventory.json

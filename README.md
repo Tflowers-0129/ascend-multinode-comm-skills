@@ -1,4 +1,4 @@
-# Ascend 多机通信预检与现场排障 Skills
+# Ascend 单机/多机通信预检与现场排障 Skills
 
 面向 Ascend A3 / A5 与 vLLM-Ascend，提供两个并列场景：服务启动前的通信预检，以及建链失败后的现场排障。用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，由具备相应访问能力的 agent 直接连接现场。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
 
@@ -22,9 +22,14 @@
 | 仿真能验证什么，什么不能放行 | [仿真与分级验收](skills/ascend-multinode-comm/references/simulation-and-gates.md) |
 | 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
 | 先从 vLLM-Ascend 官网查 A3/A5 部署脚本 | [官方配方、固定源码与审计重点](skills/ascend-multinode-comm/references/official-deployment-recipes.md) |
+| 单机混部/PD 分离、双机/多机多 DP/PD 分离怎么检查 | [六类场景、并行配置与现场请求示例](skills/ascend-multinode-comm/references/scenario-examples.md) |
 | 提供远端成功部署脚本，提炼平台/版本经验 | [成功样本的选择、读取和归档](skills/ascend-multinode-comm/references/known-good-deployments.md) |
 
 ## 快速使用
+
+需要具体部署场景时，先看 [六类中文示例](skills/ascend-multinode-comm/references/scenario-examples.md)：单机混部、单机 PD 分离、双机混部多 DP、多机混部多 DP、双机 PD 分离、多机 PD 分离。每类给出节点/设备与 DP/TP 布局、官方脚本定位、预检/排障请求及易错点；多机扩容算例与官方配方分开标注，未做现场部署验证。
+
+单机场景目前由 agent 现场检查；现有 `preflight.py` CLI 仍只接受 2～64 节点，内置 MC2 验收要求真实跨宿主，不能把同机容器伪装为多节点。新示例没有增加单节点一键检测能力。
 
 两个场景都直接使用远端部署脚本。节点按实际数量列出，共用设置和节点差异分别说明；角色、TP/DP/EP 分组和版本等优先由 agent 从远端发现，不要求用户先制作完整配置清单。认证和更多字段见 [连接信息模板](skills/ascend-multinode-comm/references/remote-server-audit.md)。
 
@@ -136,7 +141,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 ## 需要提供很多成功脚本吗
 
-不需要。先使用 [官方配方索引](skills/ascend-multinode-comm/references/official-deployment-recipes.md)：首批整理 A3/A5 多节点混部、Mooncake/GLM-5/DeepSeek-V4 PD 分离、Mooncake 与 Memcache 池化的 7 类主要配方，附官网、固定源码及实际脚本定位。基线是 v0.23.0 官方提交，具体平台和依赖边界逐项保留；A2 混部示例与旧 EP 教程单列参考，不冒充 A3/A5 现场成功。
+不需要。先使用 [官方配方索引](skills/ascend-multinode-comm/references/official-deployment-recipes.md)：整理 A3/A5 单机及多节点混部、Mooncake/GLM-5/DeepSeek-V4 PD 分离、Mooncake 与 Memcache 池化配方，附官网、固定源码及实际脚本定位。基线是 v0.23.0 官方提交，具体平台和依赖边界逐项保留；A2 混部示例与旧 EP 教程单列参考，不冒充 A3/A5 现场成功。
 
 官方基线不能覆盖的变体，再补充已有代表案例即可。给服务器连接信息、容器、工作目录和远端入口，最好附成功时间与真实请求日志路径，其余依赖/版本由 agent 在授权范围发现；不要求用户先整理或上传整套脚本。
 
