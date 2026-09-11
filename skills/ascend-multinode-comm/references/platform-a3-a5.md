@@ -54,7 +54,7 @@ timeout "${PROBE_TIMEOUT_S:?填写授权的秒数}" \
   -hccs_ping -g address "${PEER_DEVICE_IP:?填写对端vNIC设备地址}"
 ```
 
-不把 Host IP 填进上述设备地址，也不拿 Host ping 替代。对本次必要设备边双向检查，先最小范围，后按卡对/组扩展。工具 `inspect` 已在识别到 A3 且提供 `physical_devices` 时追加 vNIC/netdetect/gateway 采集；spod-info 与主动 hccs_ping 由 agent 按已核对的 chip 映射和版本执行，当前没有自动枚举所有 chip、解析全部厂商邻接表或自动发起设备 ping。
+不把 Host IP 填进上述设备地址，也不拿 Host ping 替代。对本次必要设备边双向检查，先最小范围，后按卡对/组扩展。`preflight.py inspect` 仍在识别到 A3 且提供 `physical_devices` 时追加 vNIC/netdetect/gateway。独立的 [fabric_probe.py 宿主机入口](host-fabric-detection.md) 已支持从已知 `-m` 格式自动枚举实际 card/chip/physical 映射、采集 spod-info，以及显式授权后的有界 hccs_ping；未知型号不阻止有工具证据的 HCCS 查询。未实现任意版本映射/厂商邻接表解析，也不提供自动 UBoE 打流。
 
 之后仍须运行 [HCCL 测试](hccl-testing.md) 和实际 [MC2 测试](mc2-testing.md)。设备 ping 成功不证明 HCCL communicator、专用资源、数值结果或图捕获成功。
 

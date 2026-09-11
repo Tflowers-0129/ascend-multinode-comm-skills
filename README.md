@@ -4,7 +4,7 @@
 
 预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。两者共用 DNS/TCPStore/Gloo/HCCL、逐卡检测、官方 hccl_test 配方、MC2 算子级测试、KV 验收接口和辅助脚本分析。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
 
-这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。本次开发机为 Windows、无 NPU；本机测试结果见 [验证记录](docs/validation.md)。A3/A5 上板、真实 Gloo/HCCL、MC2、KV 数据通路仍需现场验收。
+这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。开发机为 Windows、无本地 NPU；本地测试与有限的远端 Host/HCCS 小包证据见 [验证记录](docs/validation.md)。完整 A3/A5 兼容性、真实 Gloo/HCCL collective、MC2、KV 数据通路仍需现场验收。
 
 ## 导航
 
@@ -17,6 +17,7 @@
 | 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
 | A3/A5 平台、镜像、HCCS/vNIC 与分组边界 | [平台识别与分支检查](skills/ascend-multinode-comm/references/platform-a3-a5.md) |
 | HCCS / RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
+| 直接判断宿主机组网与逐设备互通，不进入容器 | [HCCS 小包、Pod/SDID 重叠检查与独立工具](skills/ascend-multinode-comm/references/host-fabric-detection.md) |
 | 对本次选定节点做官方打流、逐卡检测、MC2 验证 | [参数化 HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
 | 检测真正的 MC2 融合算子、MoE Dispatch/Combine | [MC2 算子级流程、内置探针与扩展契约](skills/ascend-multinode-comm/references/mc2-testing.md) |
 | 仿真能验证什么，什么不能放行 | [仿真与分级验收](skills/ascend-multinode-comm/references/simulation-and-gates.md) |
@@ -36,6 +37,8 @@
 提供账号密码并要求普通连接时，agent 先通过 SSH 密码提示登录，不要求提前准备密钥或独立核对首次指纹；采用正常首次连接信任，主机密钥变化时仍停止核实。密码只用于认证交互，不复述、不写入命令参数、脚本或报告。若用户要求后续免密，密码登录后创建本地专用密钥、向指定服务器追加公钥并逐台验证，保留已有登录方式。详见 [登录与密钥配置流程](skills/ascend-multinode-comm/references/remote-server-audit.md#2-建立-ssh-连接密码优先按用户选择)。
 
 只检查宿主机网络时不必提供容器/部署脚本。IP、账号和认证方式齐全即可开始；不进入容器、不把 SSH 端口可达当成服务器之间全部通信已通过。
+
+新增独立 `fabric_probe.py`：自动发现已知格式的设备映射、采集 HCCS/vNIC/Pod 与 RoCE/UB 证据；针对明确设备对执行有界 HCCS 小包，识别跨域重复地址和“rc=0 但丢包”的失败。支持 1～64 节点取证和显式 SSH 密钥路径，默认只采集/计划，`--execute` 才发小包。详细用法见 [宿主机设备检测](skills/ascend-multinode-comm/references/host-fabric-detection.md)。不提供通用 UBoE 自动判型，不把 HCCS_SW 或 fullmesh 算法当成物理全连接证明。
 
 ### 场景一：服务启动前通信预检
 

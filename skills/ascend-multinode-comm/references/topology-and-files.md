@@ -13,6 +13,8 @@
 
 ## 探测步骤与输出
 
+仅要求判断组网和设备互通时，先用 [宿主机设备网络检测](host-fabric-detection.md) 与独立 `fabric_probe.py`：无需容器、部署脚本或 source，按实际映射采集 HCCS/vNIC/Pod 和 RoCE/UB 证据，受控执行小包。下文的 `preflight.py inspect/check` 是完整服务环境入口，不是这个轻量入口的前置条件。
+
 以下是主动预检的步骤：先核实计划运行环境，审阅必要的环境初始化脚本，再执行 inspect；check/pairs 须确认空闲资源与对应测试授权。排查现有建链故障时，先按 [现场流程](remote-server-audit.md) 直接读取原 worker/容器与网络设备状态，保留原环境；不要为了取证先 source 环境或覆盖测试网卡，只有需要受控复现时才选用上述探针。启动前预检不要求存在故障 worker 或日志。
 
 1. 宿主机和容器分别运行 inspect，比较地址、路由、设备可见性、拓扑文件 hash/挂载来源、CANN/torch 版本。容器 bridge/NAT 与 host 网络需区分。
@@ -20,7 +22,7 @@
 3. 按 [A3/A5 分支](platform-a3-a5.md) 查询实时型号和 npu-smi mapping/list。提供 physical_devices 时采集每张物理卡的 hccn IP、link、net_health、LLDP；识别到 A3 时追加 vNIC/netdetect/gateway。superpod/SDID 查询须先确认 chip ID；没有映射不盲目套固定编号/卡数。
 4. 采集 rdma link、sysfs RDMA 端口 link_layer/state/gid type、urma_admin show、UB 设备线索。工具分别列 capability candidates 和 active transport；后者没有实际通道证据保持 UNVERIFIED。
 5. 由 LLDP/HiXLEP/平台管理输出构造卡/端口邻接表，区分 PEER2PEER 和 PEER2NET；检查每端口有且仅有正确对端、两侧对称、状态 UP。需要证明物理 fullmesh 时，验证所声明层级的所有必要边，不能只看跨服务器两张卡。
-6. 跑两机逐卡矩阵，再跑多机 collective 大小梯度。逻辑通路可能经过交换机或中间节点；这两个测试不能替代物理线缆拓扑证据。
+6. 对本次必要边做有界设备小包，检查对端地址归属与 Pod/SDID 重叠；按需求和授权扩展逐卡矩阵、多机 collective 大小梯度。逻辑通路可能经过交换机或中间节点；这些测试不能替代物理线缆拓扑证据。
 
 目前工具自动收集证据并给出 HCCS/RoCE/UB 能力候选，不对厂商/版本各异的 LLDP、URMA 输出强行套一个未知 schema。A3 型号仅触发 HCCS 检查候选，不证明当前链路采用 HCCS。缺少完整邻接表时物理拓扑明确标为 UNVERIFIED，交给技能按原始证据判断；此初版尚未实现所有 A3/A5 版本的全自动物理拓扑还原。
 

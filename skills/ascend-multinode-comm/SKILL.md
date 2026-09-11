@@ -16,6 +16,7 @@ description: 面向 Ascend A3/A5 与 vLLM-Ascend 的单机/多机通信预检与
 | 这些服务器、容器、工作目录和部署脚本，服务启动前验证通信 | 按下方“启动前通信预检”流程，从远端计划配置与现场环境出发，明确空闲卡、端口与时间窗；不要求故障日志或现有 worker |
 | 这些服务器、容器、工作目录和部署脚本，当前建链失败，请排查 | 按下方“现场建链排障”流程及 [现场排障指引](references/remote-server-audit.md)，读取远端脚本、日志和实际状态，按失败阶段定位 |
 | 给出服务器账号/IP，只检查宿主机之间的连接 | 直接建立 SSH 会话，检查宿主网卡/IP、路由、地址解析和目标间的有界连接；不要求容器或部署脚本，不将 SSH 可达外推为 HCCL/业务通过 |
+| 判断这些服务器是 RoCE/UBoE/FullMesh 组网，以及 NPU 能不能通 | 读 [宿主机设备网络检测](references/host-fabric-detection.md)，自动发现设备映射、HCCS/vNIC/Pod 与其他网络证据，再对本次明确设备边做有界测试；不要漏掉 HCCS，也不将算法当物理拓扑 |
 | 明确只分析本地附件、不连接服务器 | 辅助静态审计；不能据此诊断当前现场状态 |
 | 先找官网部署脚本、建立 A3/A5 参考基线 | 读 [官方配方索引](references/official-deployment-recipes.md)，按平台/模式/版本选择官网代码块和固定源码；无需先索要现场成功脚本，不执行部署 |
 | 给出单机混部/PD 分离、双机或多机多 DP/PD 分离示例 | 读 [六类场景示例](references/scenario-examples.md)，提供对应拓扑、官方脚本入口及现场请求；区分官方配方、扩容算例和工具限制，不执行部署 |
@@ -59,6 +60,8 @@ manifest 可省略；没有明确分组时不跨文件断言 rank/端口冲突�
 
 ## 工具
 
+`scripts/fabric_probe.py`：独立的宿主机网络入口；`inspect` 只采集，`ping` 默认只生成明确设备对的计划，`--execute` 才执行有界 HCCS 小包。自动解析已知 npu-smi 映射格式、逐设备 vNIC/Pod/SDID，检查跨域地址重叠与真实收发统计；支持显式 SSH `identity_file`。不依赖完整平台型号识别，不进入容器或 source，不运行 HCCL/MC2。具体参数、未知格式与 RoCE/UBoE 自动化边界见 [检测指南](references/host-fabric-detection.md)。
+
 `scripts/preflight.py`：Python 标准库控制器；通过 SSH 在宿主机或现有容器内运行同一版本的探针。探针代码通过 stdin 传输，不改远端安装、不写拓扑文件。主动检测使用短时监听器和进程，远端 watchdog 在对应命名空间内限制生命周期。
 
 当前 CLI 配置接受 2～64 节点；单机检查由 agent 按现场版本选择探针，未提供单节点一键检测。现有 MC2 验收要求真实跨宿主证据，同机多容器不能替代；多 DP 的生产 TP/EP 子域也需显式还原，详见 [示例与工具覆盖边界](references/scenario-examples.md)。
@@ -77,6 +80,7 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 
 - TCP 全为 ESTABLISHED 仍可能卡在 TCPStore 的反向 DNS；必须同时测 getnameinfo 和真正的 TCPStore/Gloo 初始化。
 - 自动探测没有唯一业务地址时停止，不按管理 IP 尾号拼业务 IP，不默认第一块网卡。
+- HCCS 与 RoCE 分别判断：RoCE 端口 DOWN/无 IP 不否定 HCCS 可达；跨 Pod 重复 vNIC/SDID 不能把本机响应算成远端成功。设备 ping 的 rc=0 不够，必须核实收发包数、丢包、失败文本和超时。
 - 优先在服务将要运行的容器、用户、环境脚本下检测。宿主机通过不能替代容器通过。
 - A3/A5 先识别再路由，不从模型名、镜像 tag 或 DAV_2201 猜平台；成功样本是有条件的参考，不是前置门槛或通用默认配置。
 - MC2 需要真实算子执行、同步、逐 rank 数值校验与重复调用证据；普通 collective 或单个融合算子通过不代表所有 MC2 路径通过。API 不存在/版本不支持与网络故障分开诊断，不静默回退到非融合实现。

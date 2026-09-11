@@ -1,0 +1,6 @@
+{
+  "nodes": [
+    {"name": "node-a", "ssh": "REPLACE_WITH_CURRENT_NODE_A_SSH"},
+    {"name": "node-b", "ssh": "REPLACE_WITH_CURRENT_NODE_B_SSH"}
+  ]
+}

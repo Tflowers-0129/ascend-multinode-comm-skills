@@ -67,6 +67,8 @@ python scripts/hccl_bench.py "${HCCL_HOST_ARGS[@]}" \
 
 ## 真正的“每卡连通性”
 
+先分离物理/设备路径问题时，可用 [宿主机 HCCS 小包检测](host-fabric-detection.md) 及 `fabric_probe.py`：自动发现映射，检查 vNIC/Pod/SDID 重叠，逐方向核对收发统计。`--same-index` 只测同编号对，不是全卡对；退出码 0 也可能伴随 100% 丢包，不能当 PASS。这一层通过不代替下述两 rank collective 或 MC2。
+
 一个多 rank AllToAll 测的是本次选定的通信域，算法可能分层转发；不能由此声称每个物理卡对都做了独立建链。
 
 `preflight.py pairs` 每次从现场选定一对节点，对各自 devices 列表做笛卡尔积；若分别有 M、N 张选定卡，则测试 M×N 个两 rank 域。8×8=64 只是算术示例，不固定节点身份或卡数。每个卡对校验多个尺寸、重复次数的 AllReduce、AllGather、AllToAll 和 barrier，并记录失败阶段；两 rank collective 同时含两个方向的数据交换。
