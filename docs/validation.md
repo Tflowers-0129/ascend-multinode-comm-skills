@@ -8,7 +8,7 @@ skill-creator 的 quick_validate.py 校验通过，SKILL.md 及相对资源结�
 
 开发中修复了 Windows stdin 编码使中文探针无法加载的问题；DNS 用例保留系统真实结果，不假定任意机器的 localhost 正反解析一定对称。
 
-尚未实测：Linux SSH/docker 全链路、CPU TCPStore/Gloo、A5 HCCL 及 64 卡对矩阵、hccl_test/CANN 9.2.0、HCCL-VM、MC2、真实 PD/KV 池化适配器、光模块/UB/RoCE 物理拓扑。源码和说明都必须保持这一边界。
+尚未实测：Linux docker 全链路、CPU TCPStore/Gloo、A5 HCCL 的完整 collective/64 卡对矩阵、hccl_test/CANN 9.2.0、HCCL-VM、MC2、真实 PD/KV 池化适配器及通用光模块/UB/RoCE 物理拓扑。2026-09-12 已完成的有限双节点 A5 HCCL Broadcast 见文末专项记录，不能外推到这些缺口。
 
 GitHub Actions 的 Linux/Windows × Python 3.10/3.12 标准库测试已通过，[运行记录](https://github.com/Tflowers-0129/ascend-multinode-comm-skills/actions/runs/34459676895) 对应实现提交 8d63150。CI 不包含 NPU 测试。
 
@@ -110,6 +110,20 @@ preflight.py 增加可选 platform 声明、实时型号保守匹配、节点/�
 先前获准的现场手工流程已完成三台宿主的真实 npu-smi/hccn 查询与有限 HCCS ping，观察到同域双向可达、另一分域发送失败而机内对照可达，以及 rc=0 仍报告丢包的情况。本次把该方法实现为工具，并用本地保留的 48 设备/64 条主覆盖探测原文离线回放：48 项 PASS、16 项 FAIL，地址归属检查符合证据。**离线回放不是新工具重新连接硬件的端到端验收**；本次仅更新仓库，未重连历史服务器。
 
 未覆盖任意驱动版本输出、跨机物理邻接自动还原、通用 UBoE 判型/打流、RoCE 带宽测试、NPU collective/MC2/KV/模型服务。真实地址、账号密码、密钥与原始现场证据留在本地忽略目录，发布用例只含合成节点与文档地址。
+
+## 2026-09-12：MPICH/Hydra 官方 HCCL Test 双节点实测
+
+在用户授权的两台 Ascend950DT 宿主上，以共享 MPICH/Hydra 4.1.3 从节点 A 启动节点 A/B 各一个 rank，运行 CANN 9.1.0 随附的官方 broadcast_test。两端 CANN 的 libhccl.so 与 libhcomm.so 哈希一致；由于本地安装的测试二进制构建哈希不同，本次将节点 A 的官方二进制复制到共享路径，两端运行时 SHA-256 完全一致。rank 包装器分别从同名数据网卡取得各自 HCCL_IF_IP，并用 HCCL_SOCKET_IFNAME 精确匹配；hostfile、账号、地址与原始日志未进入仓库。
+
+健康基线选择两端空闲且目标物理边为 UP 的设备 0，设置 level0:fullmesh，Broadcast root=rank 0，覆盖 8 KiB 到 1 MiB、2 次 warmup、5 次计时并开启正确性校验。8 个尺寸全部返回 success；1 MiB 的 alg_bandwidth 为 31.89177 GB/s，进程退出码为 0。
+
+故障隔离选择两端空闲但同一目标物理边已确认 DOWN 的设备 7，只运行 8 KiB、0 次 warmup、1 次迭代。两个 rank 都输出 HCCL_RANK_READY 和测试参数，90 秒内没有首条尺寸结果，外层 watchdog 返回 124；Hydra 随后清理所有本次 rank，设备利用率恢复为 0，目标链路仍为 DOWN。这证明 MPI 远端拉起和测试程序入口可达，阻塞发生在首个普通 HCCL Broadcast 执行阶段。结合相同设备边的 link/port_info 证据，它支持物理链路故障诊断，但不等于直接执行或验证了 MoeDistributeDispatch/MC2 kernel。
+
+首次 MPI launcher 探测曾把 hostfile 发起节点写为 localhost 且未指定 Hydra 回连接口，远端 proxy 因尝试连接自身 localhost 而失败；这次失败发生在 HCCL/NPU 之前，不计入通信结论。正式流程改为真实主机地址加 -iface，并将“先做 mpirun hostname、逐 rank 设置本机 HCCL IP、健康/故障对照和外层超时”总结进技能。现场脚本、hostfile、地址和日志不进入仓库。
+
+这是单一 CANN/驱动/硬件组合的有限现场证据。它没有验证其他 dtype、AIV/CCU 执行器、其他 collective、全部卡对、故障恢复、容器内路径或真实 vLLM MoE 请求；普通 HCCL PASS 也不能填写 MC2 PASS。
+
+本次更新后本地 unittest 共发现 132 项：Windows 上 131 项通过、1 项 Linux SIGALRM 总预算测试跳过；新增用例覆盖 Broadcast root/每节点卡数参数、loopback/大小写重复主机拒绝，以及 root 只约束 Broadcast。上述现场过程已完成 8 KiB 健康卡正确性验证；skill-creator quick_validate 通过。
 
 ## 上板验收建议
 

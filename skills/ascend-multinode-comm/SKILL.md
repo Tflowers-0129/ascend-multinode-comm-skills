@@ -76,6 +76,8 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 
 `preflight.py check` 在显式配置 `require_mc2: true` 和 `mc2_cases` 且平台身份核实时执行算子级测试，逐项写入 `mc2/<case-name>`；`gate --scope mc2` 要求平台身份、基础通信与全部显式 case 通过。配置模板见 `examples/mc2-cases.json`，须合入实际 cluster 并填写已核实的版本支持来源。
 
+需要用 mpirun 打流时，按 [HCCL 检测](references/hccl-testing.md#推荐mpichhydra--官方-hccl-test) 的固定顺序执行：统一两端 MPI/CANN/官方 HCCL Test 二进制，使用真实可达地址和明确的 Hydra 回连接口，逐 rank 加载环境并设置各自本机 HCCL IP；先以空闲健康卡做小流量 Broadcast 基线，再用完全相同参数替换为待诊断卡，设置外层超时并保存 rank-ready、首条结果和退出码。不要把某次现场 IP、容器名、路径或临时脚本固化为通用配置。
+
 ## 关键判断
 
 - TCP 全为 ESTABLISHED 仍可能卡在 TCPStore 的反向 DNS；必须同时测 getnameinfo 和真正的 TCPStore/Gloo 初始化。

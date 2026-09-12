@@ -4,7 +4,7 @@
 
 预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。两者共用 DNS/TCPStore/Gloo/HCCL、逐卡检测、官方 hccl_test 配方、MC2 算子级测试、KV 验收接口和辅助脚本分析。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
 
-这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。开发机为 Windows、无本地 NPU；本地测试与有限的远端 Host/HCCS 小包证据见 [验证记录](docs/validation.md)。完整 A3/A5 兼容性、真实 Gloo/HCCL collective、MC2、KV 数据通路仍需现场验收。
+这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。开发机为 Windows、无本地 NPU；本地测试与有限的远端 Host/HCCS 小包、双机官方 HCCL Broadcast 证据见 [验证记录](docs/validation.md)。完整 A3/A5 兼容性、Gloo、HCCL collective/卡对矩阵、MC2、KV 数据通路仍需现场验收。
 
 ## 导航
 
@@ -29,6 +29,8 @@
 ## 快速使用
 
 需要具体部署场景时，先看 [六类中文示例](skills/ascend-multinode-comm/references/scenario-examples.md)：单机混部、单机 PD 分离、双机混部多 DP、多机混部多 DP、双机 PD 分离、多机 PD 分离。每类给出节点/设备与 DP/TP 布局、官方脚本定位、预检/排障请求及易错点；多机扩容算例与官方配方分开标注，未做现场部署验证。
+
+MPICH/Hydra + 官方 HCCL Test 的标准打流过程已总结到 [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md#推荐mpichhydra--官方-hccl-test)：包括统一 MPI/测试二进制、真实地址 hostfile、逐 rank 环境与本机 HCCL IP、健康卡/故障卡对照、外层超时及结果判读。现场脚本、地址和日志不进入技能仓库。
 
 单机场景目前由 agent 现场检查；现有 `preflight.py` CLI 仍只接受 2～64 节点，内置 MC2 验收要求真实跨宿主，不能把同机容器伪装为多节点。新示例没有增加单节点一键检测能力。
 

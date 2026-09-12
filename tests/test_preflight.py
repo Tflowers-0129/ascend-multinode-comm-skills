@@ -270,6 +270,16 @@ class BenchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             b.parse_hosts(["a;rm:8", "b:8"])
 
+    def test_loopback_and_casefold_duplicate_hosts(self):
+        for hosts in (
+            ["LOCALHOST:1", "node-b:1"],
+            ["localhost.localdomain:1", "node-b:1"],
+            ["127.0.0.2:1", "node-b:1"],
+            ["node-a:1", "NODE-A:1"],
+        ):
+            with self.subTest(hosts=hosts), self.assertRaises(ValueError):
+                b.parse_hosts(hosts)
+
     def test_card_count_mismatch(self):
         with self.assertRaises(ValueError):
             b.parse_hosts(["a:8", "b:16"])
@@ -307,6 +317,33 @@ class BenchTests(unittest.TestCase):
         large = b.plan(args, "ranks")
         args.profile = "historical-1g"
         self.assertEqual(large["argv"], b.plan(args, "ranks")["argv"])
+
+    def test_broadcast_plan_has_root_and_per_node_count(self):
+        args = SimpleNamespace(host=["node-a:1", "node-b:1"],
+                               directory="/opt/tests", source="/opt/env.sh",
+                               op="broadcast", mpi="mpich", profile="smoke",
+                               aiv=False, check=True, fullmesh=True, root=0)
+        out = b.plan(args, "ranks")
+        self.assertEqual(out["binary"], "/opt/tests/bin/broadcast_test")
+        self.assertEqual(out["argv"][out["argv"].index("-p") + 1], "1")
+        self.assertEqual(out["argv"][out["argv"].index("-r") + 1], "0")
+
+    def test_root_range_applies_only_to_broadcast_cli(self):
+        common = [
+            "--host", "node-a:1", "--host", "node-b:1",
+            "--inherit-env", "--directory", "/opt/tests", "--mpi", "mpich",
+            "--root", "99",
+        ]
+        allreduce = subprocess.run(
+            [sys.executable, b.__file__, *common, "--op", "allreduce"],
+            capture_output=True,
+        )
+        broadcast = subprocess.run(
+            [sys.executable, b.__file__, *common, "--op", "broadcast"],
+            capture_output=True,
+        )
+        self.assertEqual(allreduce.returncode, 0, allreduce.stderr)
+        self.assertEqual(broadcast.returncode, 2)
 
 
 if __name__ == "__main__":

@@ -12,17 +12,25 @@ import time
 from preflight import stop_owned
 
 BINARIES = {"allgather": "all_gather_test", "allreduce": "all_reduce_test",
-            "all2all": "alltoall_test", "reduce-scatter": "reduce_scatter_test"}
+            "all2all": "alltoall_test", "reduce-scatter": "reduce_scatter_test",
+            "broadcast": "broadcast_test"}
 
 
 def parse_hosts(values):
     hosts = []
+    seen = set()
     for v in values:
         match = re.fullmatch(r"([A-Za-z0-9_][A-Za-z0-9_.-]*):([1-9][0-9]*)", v)
         if not match or int(match[2]) > 64:
             raise ValueError("host 格式应为 hostname:卡数，不支持 IPv6")
+        normalized = match[1].casefold()
+        if normalized in {"localhost", "localhost.localdomain"} or normalized.startswith("127."):
+            raise ValueError("host 必须是远端可达地址，不能使用 loopback/localhost")
+        if normalized in seen:
+            raise ValueError("需要至少两个非重复节点")
+        seen.add(normalized)
         hosts.append((match[1], int(match[2])))
-    if len(hosts) < 2 or len({x[0] for x in hosts}) != len(hosts):
+    if len(hosts) < 2:
         raise ValueError("需要至少两个非重复节点")
     if len({x[1] for x in hosts}) != 1:
         raise ValueError("本包装器要求各节点卡数一致；异构场景需明确 MPI rank/device 映射")
@@ -44,11 +52,14 @@ def plan(args, file):
     binary = str(PurePosixPath(args.directory) / "bin" / BINARIES[args.op])
     command = ["mpirun", "-f" if args.mpi == "mpich" else "--hostfile", str(file), "-n",
                str(sum(x[1] for x in hosts)), binary, "-b", "8", "-e",
-               "1G" if args.profile in {"large-1g", "historical-1g"} else "1M", "-f", "2"]
+               "1G" if args.profile in {"large-1g", "historical-1g"} else "1M", "-f", "2",
+               "-p", str(hosts[0][1])]
     if args.aiv:
         command += ["-a", "aiv"]
     if args.check:
         command += ["-c", "1"]
+    if args.op == "broadcast":
+        command += ["-r", str(getattr(args, "root", 0))]
     if args.mpi == "openmpi":
         command[1:1] = ["--map-by", f"ppr:{hosts[0][1]}:node"]
     shell = ("source " + shlex.quote(source) + " && " if source else "") + "cd -- " + shlex.quote(args.directory)
@@ -69,6 +80,7 @@ def main():
     p.add_argument("--directory", required=True, help="本次已核实的 hccl_test 安装目录")
     p.add_argument("--mpi", choices=["mpich", "openmpi"], required=True)
     p.add_argument("--op", choices=BINARIES, default="all2all")
+    p.add_argument("--root", type=int, default=0, help="broadcast root MPI rank")
     p.add_argument("--profile", choices=["smoke", "large-1g", "historical-1g"], default="smoke",
                    help="historical-1g 是 large-1g 的兼容别名，不绑定节点或 CANN 版本")
     p.add_argument("--aiv", action="store_true")
@@ -78,6 +90,14 @@ def main():
     p.add_argument("--timeout-s", type=int, default=180)
     p.add_argument("--out", default="reports/hccl-bench.json")
     args = p.parse_args()
+    try:
+        parsed_hosts = parse_hosts(args.host)
+    except ValueError as exc:
+        p.error(str(exc))
+    if args.op == "broadcast" and (
+        args.root < 0 or args.root >= sum(slots for _, slots in parsed_hosts)
+    ):
+        p.error("--root 必须是小于总 rank 数的非负整数")
     if not 1 <= args.timeout_s <= 3600:
         p.error("timeout-s 应为 1~3600")
     info = plan(args, "hostfile.generated")
