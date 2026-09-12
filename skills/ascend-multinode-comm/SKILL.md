@@ -84,6 +84,7 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 - 优先在服务将要运行的容器、用户、环境脚本下检测。宿主机通过不能替代容器通过。
 - A3/A5 先识别再路由，不从模型名、镜像 tag 或 DAV_2201 猜平台；成功样本是有条件的参考，不是前置门槛或通用默认配置。
 - MC2 需要真实算子执行、同步、逐 rank 数值校验与重复调用证据；普通 collective 或单个融合算子通过不代表所有 MC2 路径通过。API 不存在/版本不支持与网络故障分开诊断，不静默回退到非融合实现。
+- FullMesh 日志中的 `Entry-HcclChannelAcquire channelNum[N]` 只表示进入通道申请，不能当作 N 条通道都已建成；必须按同一 run/communicator 收齐各 rank 在故障窗口的日志/状态，逐一核对完成标记是否存在，再将缺失 peer/EID 边反查到双端物理端口。采集不全保持 `UNVERIFIED`。具体见 [FullMesh 通道卡住流程](references/failure-playbook.md#a5-fullmesh-通道申请卡住的定位流程)。
 - `/etc/hccl_rootinfo.json` 默认不注入挂载；检测现有挂载并给出版本化判断。只有确认当前运行路径不消费该文件，才建议备份后移除挂载/旧文件。部分官方 950DT/HiXLEP 路径要求它，不能一概删除。
 - `/etc/hixlep.json` 与 `/etc/hixlep/` 不能混为一谈；检查真实配置指向哪一个。不能捏造 JSON schema。
 - `export HCCL_ALGO=level0:fullmesh` 只在用户指定或实际脚本有此设置时继承测试，不全局改写算法；配置信息不是物理 fullmesh 的证明。

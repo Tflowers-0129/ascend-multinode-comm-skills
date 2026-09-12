@@ -114,3 +114,11 @@ preflight.py 增加可选 platform 声明、实时型号保守匹配、节点/�
 ## 上板验收建议
 
 在本次真实通信域中先选一个最小跨节点空闲卡子集，在目标容器中运行 inspect/check，核对平台、IP/卡映射/版本与日志；具体子集必须满足当前算子的 rank/组网约束，不机械要求所有 MC2 两张卡就能运行。随后按当前卡列表扩展卡对覆盖和真实模型域，再接入实际 connector 与各 MC2 测试。每一步保存报告，发现异常先缩小范围再加大负载，不固定节点身份或每机卡数。
+
+## 新增：A5 FullMesh channel acquire 卡住证据链
+
+2026-09-12，根据一次已授权的双节点 A5 MoE 现场排障补充脱敏方法。新流程区分 `Entry-HcclChannelAcquire channelNum[N]` 与版本对应的 acquire completion，要求按同一 run/communicator 收齐全部 rank，再把缺失 peer/EID 边反查到容器逻辑卡、物理 NPU/chip、UDie 和双端端口。文档同时说明静态 topology 生成 rootinfo 不验证实时物理链路、两个 DOWN endpoint 可能属于同一条链路，以及部分 rank idle/其余 rank launch-and-wait 只是旁证。
+
+MC2 指南新增 V2/V4 分层说明，补充固定提交的 op-plugin/kernel/tiling 实现链接和 master 文档导航：vLLM-Ascend 调用 torch_npu V2 接口，op-plugin 可从 V2 适配入口选择 `aclnnMoeDistributeDispatchV4`，CANN 的 V2 算子目录包含 V4 host API 与 arch35 FullMesh kernel/tiling 实现。`fullmesh_v2` 是 `commAlg` 模板选项，不等于 aclnn V4。公开源码存在只证明对应版本的实现与支持声明，现场仍需核对配套 tag、安装二进制、参数约束和实时链路。
+
+本次只更新技能文档，不重连历史 NPU 或重跑模型。Windows 使用随附 Python 运行 129 项 unittest，其中 128 项通过、1 项 Linux SIGALRM 测试按预期跳过；`git diff --check` 无空白错误。skill-creator 的 `quick_validate.py` 因本地运行时没有 PyYAML，改在已有 PyYAML 的授权 Linux 临时仓库副本上执行并通过；没有为校验安装系统依赖。

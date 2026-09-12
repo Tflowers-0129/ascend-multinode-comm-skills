@@ -54,6 +54,14 @@
 
 官方 HiXLEP 生成指南由安装文档链接到 [A5 LocalCommRes 配置指南](https://gitcode.com/cann/hixl/wiki/A5%20LocalCommRes%E9%85%8D%E7%BD%AE%E6%8C%87%E5%8D%97.md)。本次该页面抓取超时，因此没有编造文件格式或生成参数；现场应读取和镜像匹配的版本。池化还区分设备间与主机/设备资源路径，不要用一个命名相似文件替代整套拓扑。
 
+## A5 FullMesh：从 rootinfo 到实时物理边
+
+先查当前 `mindcluster-tools`/厂商工具版本及其输入来源。若生成过程只读取驱动附带的静态 topology JSON 或其他静态清单，那么“命令成功 + rootinfo 中存在 EID”只证明输入可解析并生成了资源描述；即使对应端口当前 DOWN，该 EID 仍可能被写入。不能据此宣布物理 fullmesh、远端邻接或运行时 channel 已通过。若某版本生成器明确读取并校验了实时状态，则按它实际输出的证据范围判断，不把上述边界无条件外推到所有版本。
+
+遇到部分 rank 卡在 FullMesh channel acquire 时，按 [逐 rank/peer/EID 定位流程](failure-playbook.md#a5-fullmesh-通道申请卡住的定位流程) 将日志里的缺失边映射到双端“rank → 逻辑卡 → 物理 NPU/chip → UDie → EID → port”。再把 rootinfo、HiXLEP `comm_id`/`dst_eid`、`route.conf` 与同一时刻的双端端口 link/PHY/health/邻接/错误计数交叉核对。字段和命令随版本变化，先看本机帮助与原始输出，不硬编码卡号、UDie 或端口号。
+
+计数时以链路和 endpoint 分栏：一条跨机物理链路通常在两端各有一个 endpoint；“两个端口 DOWN”可能只是同一条坏边的双端观测。反之，一个本地 EID 对某个 peer 建链成功，也不能证明该 rank 的其他 peer/EID 边都可达。最终以所有必要端口实时 UP、所有 rank 通道申请完成，以及最小 collective/目标 MC2 算子复测通过共同闭环。
+
 ## 不自动“修复”的项目
 
 不关闭 TLS、不关闭自定义算子安全校验、不改路由/防火墙、不改系统 DNS、不设置特权容器、不自动删除 rootinfo/hixlep。即使某官方排障页给出此类操作，也必须在明确故障原因、变更窗口和授权下单独处理。

@@ -27,6 +27,25 @@ MC2 单独验收，不能由 AllGather、AllReduce、AllToAll 或 `hccl_test -a 
 
 vLLM-Ascend 的 MC2/FusedMC2、prefill、通信算法与容量开关也随版本变化。可从 [v0.23.0 附加配置](https://docs.vllm.ai/projects/ascend/zh-cn/v0.23.0/user_guide/configuration/additional_config.html) 和 [同版本 token dispatcher](https://github.com/vllm-project/vllm-ascend/blob/v0.23.0/vllm_ascend/ops/fused_moe/token_dispatcher.py) 起查，再对照用户现场版本；不要照抄别的版本开关，或把 `HCCL_ALGO=level0:fullmesh` 当成这些 MC2 分支都已启用。
 
+### 同一调用栈为什么会同时出现 V2 和 V4
+
+先按软件边界拆开名称；它们不一定表示执行了两个不同 kernel，也不自动表示发生了版本回退：
+
+| 栈中名称/位置 | 所属边界 | 能证明什么 |
+|---|---|---|
+| vLLM-Ascend `token_dispatcher.py` 调用 `torch_npu.npu_moe_distribute_dispatch_v2` | 框架编排与 Python 调用点 | 实际选择了 torch_npu 暴露的 V2 Python 接口；不能据此定位 AI Core 内核源码 |
+| `MoeDistributeDispatchV2KernelOpApi.cpp` | torch_npu/op-plugin 的 PyTorch 算子适配层；部分发布包中是生成文件 | 异常经过 V2 适配入口传播；文件名不要求其内部只能调用同后缀的 aclnn API |
+| `aclnnMoeDistributeDispatchV4` | CANN aclnn 执行接口 | 该适配层本次调用的后端 aclnn 接口名；`call ... failed` 仍只是上层错误出口，首因要看同一时刻的 NNOP/HCCL/device plog |
+| `MoeDistributeDispatchV2`、`MoeDistributeDispatchV2_0` 或 `mc2/moe_distribute_dispatch_v2` | CANN 算子族、实例名与开源算子目录 | 对应 op_host/tiling/op_kernel 的算子实现归属；目录后缀不要求公开 aclnn API 也叫 V2 |
+
+公开源码本身体现了这种分层：[vLLM-Ascend v0.23.0 token dispatcher](https://github.com/vllm-project/vllm-ascend/blob/v0.23.0/vllm_ascend/ops/fused_moe/token_dispatcher.py) 会在接口存在时调用 `npu_moe_distribute_dispatch_v2`；固定版本的 [op-plugin V2 适配文件](https://gitcode.com/Ascend/op-plugin/blob/05072e4503d261242fcdb5418e4be933e8d08642/op_plugin/ops/opapi/MoeDistributeDispatchV2KernelOpApi.cpp) 会按可用性选择 `aclnnMoeDistributeDispatchV4`，并保留 V3/V2 兼容分支；CANN [MoeDistributeDispatchV2 算子目录](https://gitcode.com/cann/ops-transformer/tree/master/mc2/moe_distribute_dispatch_v2) 内也提供 [aclnnMoeDistributeDispatchV4 接口文档](https://gitcode.com/cann/ops-transformer/blob/master/mc2/moe_distribute_dispatch_v2/docs/aclnnMoeDistributeDispatchV4.md)。因此现场看到 “V2 adapter/算子目录 + V4 aclnn” 可以是同一条正常调用链；错误明确写 V4 时，本次实际走的是 V4 host API，但最终仍属于 `MoeDistributeDispatchV2` 算子族。
+
+源码归属也要分层表述：vLLM-Ascend 负责选择路径、准备参数并发起 torch_npu 调用；op-plugin 为 torch_npu 提供算子适配；真正的算子 host/tiling/kernel 属于与 CANN 版本配套的 ops-transformer/已安装算子包。先用 traceback 和已安装包确认当前路径，再查看匹配 release/tag 的源码；`master` 只用于导航，不能代替现场 CANN 版本。
+
+[MoeDistributeDispatchV2 README](https://gitcode.com/cann/ops-transformer/tree/master/mc2/moe_distribute_dispatch_v2) 当前公开说明列出了 Ascend 950DT，并给出 `commAlg` 的 `fullmesh_v1`/`fullmesh_v2` 约束。这里的 `fullmesh_v2` 是通信算法/模板选项，不是 aclnn V4 的另一种写法。若要找 A5 FullMesh kernel，当前固定源码中的正确落点是 [arch35 FullMesh 头文件](https://gitcode.com/cann/ops-transformer/blob/2f0ffba13ab5d0ae6b92d4e12b097d1fb29ee4d0/mc2/moe_distribute_dispatch_v2/op_kernel/arch35/moe_distribute_dispatch_v2_a5_full_mesh.h) 和选择该模板的 [arch35 入口 cpp](https://gitcode.com/cann/ops-transformer/blob/2f0ffba13ab5d0ae6b92d4e12b097d1fb29ee4d0/mc2/moe_distribute_dispatch_v2/op_kernel/arch35/moe_distribute_dispatch_v2_apt.cpp)，不是一个并不存在的通用 `op_kernel/*.cpp` 文件名；host 侧还由 [arch35 tiling](https://gitcode.com/cann/ops-transformer/blob/2f0ffba13ab5d0ae6b92d4e12b097d1fb29ee4d0/mc2/moe_distribute_dispatch_v2/op_host/op_tiling/arch35/moe_distribute_dispatch_v2_tiling_arch35.cpp) 解析 `commAlg` 并选择模板。
+
+这些文件只能证明该源码版本有对应实现/支持声明，不是用户现场镜像版本、shape/量化组合、物理 FullMesh 或当前链路健康的通过证明。支持性仍需固定与 CANN 配套的 tag，逐项核对产品、dtype/量化、BS/shape、rank/EP、`commAlg`、`HCCL_BUFFSIZE` 与 Dispatch/Combine 配套关系。
+
 ## 2. 测试前的版本与资源核对
 
 agent 负责从现场收集并填写，不强迫用户先整理完整算子清单：
