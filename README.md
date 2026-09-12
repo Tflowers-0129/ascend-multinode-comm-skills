@@ -11,6 +11,7 @@
 | 要解决的问题 | 入口 |
 |---|---|
 | 让 agent 进行通信预检或现场排障 | [技能入口与场景选择](skills/ascend-multinode-comm/SKILL.md) |
+| 用户自己做双机 HCCL 打流或从 PyTorch 调用通信算子 | [手动通信测试目录](skills/ascend-multinode-comm/manual-tests/README.md) |
 | 服务启动前直接连接服务器预检 | [预检流程](skills/ascend-multinode-comm/SKILL.md#启动前通信预检) |
 | 给出服务器、容器、工作目录、远端脚本 | [共用连接信息与现场排障指引](skills/ascend-multinode-comm/references/remote-server-audit.md) |
 | 辅助核对部署脚本里的配置错误 | [脚本分析规则](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
@@ -28,9 +29,11 @@
 
 ## 快速使用
 
+只想手动打流或写最小 Python 复现时，直接进入 [手动通信测试目录](skills/ascend-multinode-comm/manual-tests/README.md)：其中有一个简洁的 `mpirun + hccl_test` 双机脚本，以及直接调用 `torch.distributed` HCCL collective 并校验结果的脚本。融合 MC2 与普通 collective 的边界也在该入口明确标出。
+
 需要具体部署场景时，先看 [六类中文示例](skills/ascend-multinode-comm/references/scenario-examples.md)：单机混部、单机 PD 分离、双机混部多 DP、多机混部多 DP、双机 PD 分离、多机 PD 分离。每类给出节点/设备与 DP/TP 布局、官方脚本定位、预检/排障请求及易错点；多机扩容算例与官方配方分开标注，未做现场部署验证。
 
-MPICH/Hydra + 官方 HCCL Test 的标准打流过程已总结到 [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md#推荐mpichhydra--官方-hccl-test)：包括统一 MPI/测试二进制、真实地址 hostfile、逐 rank 环境与本机 HCCL IP、健康卡/故障卡对照、外层超时及结果判读。现场脚本、地址和日志不进入技能仓库。
+MPICH/Hydra + 官方 HCCL Test 的标准打流过程已总结到 [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md#推荐mpichhydra--官方-hccl-test)，可直接执行的通用脚本位于 [手动通信测试目录](skills/ascend-multinode-comm/manual-tests/README.md)。现场专用脚本、地址、hostfile 和日志不进入技能仓库。
 
 单机场景目前由 agent 现场检查；现有 `preflight.py` CLI 仍只接受 2～64 节点，内置 MC2 验收要求真实跨宿主，不能把同机容器伪装为多节点。新示例没有增加单节点一键检测能力。
 
@@ -156,7 +159,7 @@ python scripts/preflight.py gate --report reports/pairs.json --scope pairs
 
 ## 在不同 agent 中使用
 
-保留 `skills/ascend-multinode-comm` 整个目录，包括 `SKILL.md`、`scripts/`、`references/` 和 `examples/`：
+保留 `skills/ascend-multinode-comm` 整个目录，包括 `SKILL.md`、`scripts/`、`manual-tests/`、`references/` 和 `examples/`：
 
 - agent 支持加载 `SKILL.md` 技能包时，按该产品的技能加载机制添加本目录；安装位置和触发方式以该产品为准，不要求统一的目录或调用语法。
 - 没有技能加载器但支持读文件时，将本目录交给 agent，要求先读取 `SKILL.md`，按任务选读引用文档，再使用自身可用的 SSH/命令执行工具。无需把所有参考资料一次性粘贴进提示词。

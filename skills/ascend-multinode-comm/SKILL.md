@@ -13,6 +13,7 @@ description: 面向 Ascend A3/A5 与 vLLM-Ascend 的单机/多机通信预检与
 
 | 用户意图 | 行为 |
 |---|---|
+| 用户希望自己手动做 HCCL 打流，或从 Python/torch 调用通信算子 | 先读 [手动通信测试](manual-tests/README.md)，给出与现场版本匹配的最小命令；普通 collective 与融合 MC2 分开验证 |
 | 这些服务器、容器、工作目录和部署脚本，服务启动前验证通信 | 按下方“启动前通信预检”流程，从远端计划配置与现场环境出发，明确空闲卡、端口与时间窗；不要求故障日志或现有 worker |
 | 这些服务器、容器、工作目录和部署脚本，当前建链失败，请排查 | 按下方“现场建链排障”流程及 [现场排障指引](references/remote-server-audit.md)，读取远端脚本、日志和实际状态，按失败阶段定位 |
 | 给出服务器账号/IP，只检查宿主机之间的连接 | 直接建立 SSH 会话，检查宿主网卡/IP、路由、地址解析和目标间的有界连接；不要求容器或部署脚本，不将 SSH 可达外推为 HCCL/业务通过 |
@@ -60,6 +61,8 @@ manifest 可省略；没有明确分组时不跨文件断言 rank/端口冲突�
 
 ## 工具
 
+[手动通信测试](manual-tests/README.md)：面向用户直接执行，包含简洁的 MPICH/Hydra + 官方 HCCL Test 双机脚本，以及 `torch.distributed` HCCL collective 的 Python 脚本。复现现场问题时优先沿用用户已有官方教程，只替换当前路径、网卡、hostfile、rank 和设备号。
+
 `scripts/fabric_probe.py`：独立的宿主机网络入口；`inspect` 只采集，`ping` 默认只生成明确设备对的计划，`--execute` 才执行有界 HCCS 小包。自动解析已知 npu-smi 映射格式、逐设备 vNIC/Pod/SDID，检查跨域地址重叠与真实收发统计；支持显式 SSH `identity_file`。不依赖完整平台型号识别，不进入容器或 source，不运行 HCCL/MC2。具体参数、未知格式与 RoCE/UBoE 自动化边界见 [检测指南](references/host-fabric-detection.md)。
 
 `scripts/preflight.py`：Python 标准库控制器；通过 SSH 在宿主机或现有容器内运行同一版本的探针。探针代码通过 stdin 传输，不改远端安装、不写拓扑文件。主动检测使用短时监听器和进程，远端 watchdog 在对应命名空间内限制生命周期。
@@ -94,6 +97,6 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 
 ## 加载与自检
 
-保留整个技能目录及 scripts、references、examples，按所用 agent 的技能加载机制添加；没有加载器但能读取文件的 agent 可直接读取本文件并按需打开引用资源，不假定统一安装路径或调用语法。工具也可作为 Python CLI 独立运行；需要控制端 Python 3.10+ 与 OpenSSH，目标环境和测试资源按相应参考文档准备。不同 agent 的认证与执行能力需现场核实，未提供相应能力时不能宣称完成远端预检或排障。
+保留整个技能目录及 scripts、manual-tests、references、examples，按所用 agent 的技能加载机制添加；没有加载器但能读取文件的 agent 可直接读取本文件并按需打开引用资源，不假定统一安装路径或调用语法。工具也可作为 Python CLI 独立运行；需要控制端 Python 3.10+ 与 OpenSSH，目标环境和测试资源按相应参考文档准备。不同 agent 的认证与执行能力需现场核实，未提供相应能力时不能宣称完成远端预检或排障。
 
 仓库根目录执行 `python -m unittest discover -s tests -v`。硬件实测和 CPU/Linux 集成测试分别记录，不能把 mock 当作硬件验收。
