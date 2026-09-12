@@ -17,7 +17,7 @@ A3/A5 共用参数化入口，但先按 [平台分支](platform-a3-a5.md) 核实
 
 ## 推荐：MPICH/Hydra + 官方 HCCL Test
 
-本节固化可迁移的打流过程，不收录某次现场的 hostfile、IP、容器名、安装路径或临时 rank wrapper。实际执行时可根据现场生成短期 wrapper，但它只负责逐 rank 加载本机环境和启动官方 HCCL Test，不能把一个节点的地址硬编码给其他节点。
+优先复用现场官方教程，不先开发通用控制器。核心只有三步：加载 MPI/CANN 环境，按每节点 rank 数写 hostfile，然后直接用 mpirun 运行官方 hccl_test。
 
 先用实际可达地址创建 MPICH hostfile，首行会先分配 rank 0：
 
@@ -26,59 +26,28 @@ node-a.example:1 user=test-user
 node-b.example:1 user=test-user
 ~~~
 
-多节点 hostfile 不要写 localhost 或 127.0.0.1。Hydra 的远端 proxy 必须回连发起节点；若发起节点被发布为 localhost，远端会错误地连接自身并报 unable to connect ... localhost。先执行只打印 hostname/rank 的 mpirun launcher smoke，并用 -iface 指定 Hydra 发布的回连网卡。进入 HCCL 前，每个 rank 再从同名数据网卡读取自己的 IPv4，分别设置 HCCL_IF_IP 和 HCCL_SOCKET_IFNAME，不能把发起节点地址复制到所有节点。
+hostfile 的 `host:slots` 表示该节点启动多少 rank；例如两台机器各 8 卡就是两行 `:8`，总进程数 `-n 16`。先保证发起节点能免密 SSH 到 hostfile 中的节点。
 
-先选择已知健康且空闲的同编号设备建立基线。下列变量只是过程骨架，值必须由当前现场核实：
+按 Wiki 形式直接执行，路径和网卡替换为当前环境：
 
 ~~~bash
-export MPI_HOME=/shared/software/mpich
-export HCCL_ENV_SCRIPT=/usr/local/Ascend/cann/set_env.sh
-export HCCL_HOSTFILE=/shared/hccl-test/hostfile
-export HCCL_MPI_IFACE=data0.3001
-export HCCL_DATA_IFACE=data0.3001
-export HCCL_TEST_USE_DEVS=0
-export HCCL_WORLD_SIZE=2
-export HCCL_NPUS_PER_NODE=1
-export HCCL_TEST_DIR=/usr/local/Ascend/cann/tools/hccl_test
-export HCCL_TEST_OP=broadcast
-export HCCL_TEST_ROOT=0
-export HCCL_TEST_MINBYTES=8K
-export HCCL_TEST_MAXBYTES=1M
-export HCCL_TEST_WARMUP=2
-export HCCL_TEST_ITERS=5
-export HCCL_TEST_CHECK=1
-export HCCL_TEST_TIMEOUT_S=120
-export HCCL_TEST_LOG=/shared/hccl-test/broadcast-device0.log
-set -o pipefail
+export PATH=/path/to/mpich/bin:$PATH
+source /path/to/cann/set_env.sh
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/path/to/cann/lib64:/path/to/mpich/lib
+export HCCL_BUFFSIZE=2048
+export HCCL_SOCKET_IFNAME=<两端实际通信网卡名>
+# 若现场已有集群环境脚本，在这里 source；没有就跳过。
 
-# 1. launcher smoke：确认两个 rank 落到预期节点，且远端 proxy 能回连发起节点。
-timeout 30s "$MPI_HOME/bin/mpirun" -launcher ssh -iface "$HCCL_MPI_IFACE" \
-  -f "$HCCL_HOSTFILE" -n "$HCCL_WORLD_SIZE" -prepend-rank hostname
-
-# 2. HCCL Test：让各 rank 的现场临时 wrapper 先 source CANN、设置本机
-#    HCCL_IF_IP/HCCL_SOCKET_IFNAME/HCCL_TEST_USE_DEVS，再 exec 同一份官方二进制。
-timeout --signal=INT --kill-after=10s "$HCCL_TEST_TIMEOUT_S"s \
-  "$MPI_HOME/bin/mpirun" -launcher ssh -iface "$HCCL_MPI_IFACE" \
-  -f "$HCCL_HOSTFILE" -n "$HCCL_WORLD_SIZE" -prepend-rank \
-  -genv MPI_HOME "$MPI_HOME" -genv HCCL_ENV_SCRIPT "$HCCL_ENV_SCRIPT" \
-  -genv HCCL_DATA_IFACE "$HCCL_DATA_IFACE" \
-  -genv HCCL_TEST_USE_DEVS "$HCCL_TEST_USE_DEVS" \
-  /shared/hccl-test/rank-env-wrapper.sh /shared/hccl-test/broadcast_test \
-  -b "$HCCL_TEST_MINBYTES" -e "$HCCL_TEST_MAXBYTES" -f 2 \
-  -d fp32 -p "$HCCL_NPUS_PER_NODE" -n "$HCCL_TEST_ITERS" \
-  -w "$HCCL_TEST_WARMUP" -c "$HCCL_TEST_CHECK" -r "$HCCL_TEST_ROOT" \
-  2>&1 | tee "$HCCL_TEST_LOG"
-test_rc=${PIPESTATUS[0]}
-printf 'HCCL test rc=%s\n' "$test_rc"
+cd /path/to/hccl_test
+mpirun -f hostfile -n <总rank数> ./bin/alltoall_test \
+  -b 8 -e 1G -f 2 -a aiv
 ~~~
 
-broadcast 且 HCCL_TEST_ROOT=0 时，hostfile 首行的 rank 0 是发送根，适合验证“节点 A → 节点 B”；allreduce 则是双向 collective。mpirun 前面的 -n 表示 MPI 总 rank 数，测试二进制后面的 -n 表示测试迭代次数，两者不能混淆。设备列表个数必须等于每节点 slots，例如 host:2 对应 HCCL_TEST_USE_DEVS=0,1；启动前必须显式核对。
+快速隔离单张卡时不要跑 16 rank：hostfile 改为每台 `:1`，设置 `HCCL_TEST_USE_DEVS=<device_id>`，用 `-n 2 -p 1` 跑 8 KiB Broadcast。先测健康卡，再只替换 device id 测故障卡，并加约 90 秒 timeout。健康卡成功、故障卡在打印测试参数后始终没有首条结果且 timeout=124，说明问题跟随该卡的跨机通信路径。
 
-若各节点本地 broadcast_test 哈希不同，可将一份已核实的官方二进制放到共享只读路径。每个 rank 应重新 source CANN 环境、补 MPI 库、执行 ldd 缺库检查并打印实际二进制 SHA-256。MPI 版本、CANN/HCCL 库、测试二进制及卡映射仍要先核对；共享二进制不等于允许混用不兼容运行库。
+若发起节点不能通过自身管理 IP 免密 SSH，可把 hostfile 首行写为 `localhost:1`，同时给 Hydra 指定 `-iface <发起节点实际回连网卡>`；否则远端 proxy 可能错误回连自己的 localhost。普通 HCCL 测试用于定位通信路径，不能替代 MC2 算子支持性验证。
 
-只有生产配置确实使用该算法且版本适用时才设置 HCCL_ALGO=level0:fullmesh。健康基线通过后，再把 HCCL_TEST_USE_DEVS 改为待隔离卡，并把尺寸缩到单一小值、迭代降为 1。不要用 -i 0 表示单尺寸：该工具把它解释为持续重复起始尺寸；应把 -b/-e 设为相同值。
-
-外层 timeout 返回 124、两端已打印 HCCL_RANK_READY、测试参数也已输出，但始终没有首条尺寸结果，说明 MPI 拉起和进程入口已经通过，阻塞发生在 HCCL collective 执行阶段。它需要与同一设备边的 hccn_tool -g -link/-port_info/-down_data 证据关联；仍不能单凭普通 HCCL 测试断言具体 MC2 kernel 支持或失败。
+单机 EP/MC2 成功与某张卡的对外光口 DOWN 不矛盾：单机通信通常走机内 HCCS/UB 等路径，跨机才使用出机链路。只有单机 rank 组合也必须经过该物理端口、且确实让该 rank 产生非零通信量时，端口 DOWN 才应同时影响单机测试。
 
 以下是参数化的 MPICH 手工命令形态，不会替用户选择目标或生成生产配置。环境变量须先从现场填好，hostfile 用唯一的新文件绝对路径，总 rank 数与其 slots 总和一致。手工模式需自行核对。
 
