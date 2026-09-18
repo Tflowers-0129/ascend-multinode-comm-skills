@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "name": "large-moe-pd-example",
+  "mode": "quick",
+  "objective": "output_throughput",
+  "environment": {
+    "platform": "A2",
+    "model": "large-moe-model",
+    "vllm": "fill-current-version",
+    "vllm_ascend": "fill-current-version",
+    "cann": "fill-current-version",
+    "connector": "fill-current-connector",
+    "transport": "fill-current-transport"
+  },
+  "hardware": {
+    "cluster_devices": 64,
+    "devices_per_host": 8
+  },
+  "workload": {
+    "concurrency": 48,
+    "mean_uncached_input_tokens": 65536,
+    "mean_output_tokens": 1024,
+    "prefix_hit_rate": 0.9,
+    "qps": 1.0
+  },
+  "roles": {
+    "prefill": {
+      "devices": 32,
+      "tp_sizes": [4, 8, 16],
+      "pp_sizes": [1, 2, 4],
+      "minimum_replica_devices": 16,
+      "maximum_dp": 4,
+      "require_node_local_tp": true
+    },
+    "decode": {
+      "devices": 32,
+      "tp_sizes": [2, 4, 8],
+      "pp_sizes": [1],
+      "minimum_replica_devices": 2,
+      "maximum_dp": 16,
+      "require_node_local_tp": true
+    }
+  },
+  "constraints": {
+    "prefill_tp_multiple_of_decode_tp": true,
+    "decode_pp_must_be_one": true,
+    "forbid_cross_host_tp": true
+  },
+  "max_recommendations": 3
+}

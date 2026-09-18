@@ -1,191 +1,132 @@
-# Ascend 单机/多机通信预检与现场排障 Skills
+# Ascend 单机/多机通信、服务与性能 Skills
 
-面向 Ascend A2 / A3 / A5 与 vLLM-Ascend，提供通信预检、建链失败现场排障，以及经明确授权的配置驱动服务拉起、有限寻优和 E2E 测试。用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，由具备相应访问能力的 agent 直接连接现场。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
+面向 Ascend A2/A3/A5 与 vLLM-Ascend，覆盖从“选择并行策略”到“现场验证”的完整闭环：理论分析 DP/TP/PP/EP，通信预检与建链排障，配置驱动的 P/D/Proxy 生命周期，E2E 测试，以及 quick/exhaustive 有界寻优。
 
-预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。生命周期工作流从严格 JSON、计划哈希和远端脚本哈希出发，只管理自身 supervisor，按依赖启动、测试并串行评估有限候选。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
+官网脚本和历史成功配置只作为有版本条件的 baseline。理论候选、通信证据、服务健康、精度和性能分别判定；任何一层都不能代替下一层。远端脚本可以只提供服务器内路径，不要求先上传到仓库。
 
-这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。开发机为 Windows、无本地 NPU；本地测试与有限的远端 Host/HCCS 小包、双机官方 HCCL Broadcast 证据见 [验证记录](docs/validation.md)。完整 A3/A5 兼容性、Gloo、HCCL collective/卡对矩阵、MC2、KV 数据通路仍需现场验收。
+## 五个主能力
 
-## 导航
+| 能力 | 输入 | 主要产物 |
+|---|---|---|
+| 理论并行规划 | 模型/版本、卡数、P/D 预算、合法 TP/PP 范围、固定负载、目标指标 | P/D DP×TP×PP 首选与备选、理由、假设、最小验证计划 |
+| 通信预检 | 节点、容器、工作目录、部署脚本与允许的空闲资源 | Host/TCPStore/Gloo/HCCL/MC2/PD-KV 的已测、失败和未测范围 |
+| 现场排障 | 现有进程、日志、网络/设备状态和失败时间线 | 最早失败阶段、节点/rank/链路证据与最小修复建议 |
+| 服务生命周期 | 严格本地配置、远端前台脚本、artifact 哈希和明确授权 | ownership-scoped launch/status/test/stop 报告与可回滚 run ID |
+| 性能验证与寻优 | 已通过 baseline、固定 workload、主指标、硬 SLO 和预算 | verify、quick 或多阶段 exhaustive 报告；最终脚本需重新 plan 和全量验收 |
 
-| 要解决的问题 | 入口 |
-|---|---|
-| 让 agent 进行通信预检或现场排障 | [技能入口与场景选择](skills/ascend-multinode-comm/SKILL.md) |
-| 用户自己做双机 HCCL 打流或从 PyTorch 调用通信算子 | [手动通信测试目录](skills/ascend-multinode-comm/manual-tests/README.md) |
-| 服务启动前直接连接服务器预检 | [预检流程](skills/ascend-multinode-comm/SKILL.md#启动前通信预检) |
-| 给出服务器、容器、工作目录、远端脚本 | [共用连接信息与现场排障指引](skills/ascend-multinode-comm/references/remote-server-audit.md) |
-| 辅助核对部署脚本里的配置错误 | [脚本分析规则](skills/ascend-multinode-comm/references/deployment-script-audit.md) |
-| 混部、分离、池化分别在何时通信 | [分阶段通信矩阵](skills/ascend-multinode-comm/references/communication-stages.md) |
-| A3/A5 平台、镜像、HCCS/vNIC 与分组边界 | [平台识别与分支检查](skills/ascend-multinode-comm/references/platform-a3-a5.md) |
-| HCCS / RoCE / UBoE / fullmesh 与拓扑文件 | [拓扑和文件审计](skills/ascend-multinode-comm/references/topology-and-files.md) |
-| 直接判断宿主机组网与逐设备互通，不进入容器 | [HCCS 小包、Pod/SDID 重叠检查与独立工具](skills/ascend-multinode-comm/references/host-fabric-detection.md) |
-| 对本次选定节点做官方打流、逐卡检测、MC2 验证 | [参数化 HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md) |
-| 检测真正的 MC2 融合算子、MoE Dispatch/Combine | [MC2 算子级流程、内置探针与扩展契约](skills/ascend-multinode-comm/references/mc2-testing.md) |
-| 仿真能验证什么，什么不能放行 | [仿真与分级验收](skills/ascend-multinode-comm/references/simulation-and-gates.md) |
-| 历史故障复盘 | [现场坑位与定位](skills/ascend-multinode-comm/references/failure-playbook.md) |
-| 先从 vLLM-Ascend 官网查 A3/A5 部署脚本 | [官方配方、固定源码与审计重点](skills/ascend-multinode-comm/references/official-deployment-recipes.md) |
-| 单机混部/PD 分离、双机/多机多 DP/PD 分离怎么检查 | [六类场景、并行配置与现场请求示例](skills/ascend-multinode-comm/references/scenario-examples.md) |
-| 提供远端成功部署脚本，提炼平台/版本经验 | [成功样本的选择、读取和归档](skills/ascend-multinode-comm/references/known-good-deployments.md) |
-| 根据用户配置拉起 P/D/Proxy、寻优并自动测试 | [配置驱动工作流](skills/ascend-multinode-comm/references/service-lifecycle.md) |
-| 查看本次 PD/OOM/版本/特性/测试问题总结 | [vLLM-Ascend PD 运维规则](skills/ascend-multinode-comm/references/vllm-pd-operations.md) |
+技能入口与完整路由见 [`SKILL.md`](skills/ascend-multinode-comm/SKILL.md)。
 
-## 快速使用
+## 接入方式
 
-只想手动打流或写最小 Python 复现时，直接进入 [手动通信测试目录](skills/ascend-multinode-comm/manual-tests/README.md)：其中有一个简洁的 `mpirun + hccl_test` 双机脚本，以及直接调用 `torch.distributed` HCCL collective 并校验结果的脚本。融合 MC2 与普通 collective 的边界也在该入口明确标出。
+- 支持技能加载器的 agent：安装或加载整个 `skills/ascend-multinode-comm` 目录，不能只复制 `SKILL.md`。
+- 能读取文件但没有技能加载器的 agent：先读 `SKILL.md`，再按其中路由只打开当前任务需要的 reference；有远端能力时仍需使用自身的 SSH/命令执行工具。
+- 只需本地工具时：可直接运行下方 Python CLI。没有文件读取、远端访问或执行能力的 agent 必须明确缺口，不能声称已完成现场验证。
 
-需要具体部署场景时，先看 [六类中文示例](skills/ascend-multinode-comm/references/scenario-examples.md)：单机混部、单机 PD 分离、双机混部多 DP、多机混部多 DP、双机 PD 分离、多机 PD 分离。每类给出节点/设备与 DP/TP 布局、官方脚本定位、预检/排障请求及易错点；多机扩容算例与官方配方分开标注，未做现场部署验证。
-
-MPICH/Hydra + 官方 HCCL Test 的标准打流过程已总结到 [HCCL 检测指南](skills/ascend-multinode-comm/references/hccl-testing.md#推荐mpichhydra--官方-hccl-test)，可直接执行的通用脚本位于 [手动通信测试目录](skills/ascend-multinode-comm/manual-tests/README.md)。现场专用脚本、地址、hostfile 和日志不进入技能仓库。
-
-单机场景目前由 agent 现场检查；现有 `preflight.py` CLI 仍只接受 2～64 节点，内置 MC2 验收要求真实跨宿主，不能把同机容器伪装为多节点。新示例没有增加单节点一键检测能力。
-
-两个场景都直接使用远端部署脚本。节点按实际数量列出，共用设置和节点差异分别说明；角色、TP/DP/EP 分组和版本等优先由 agent 从远端发现，不要求用户先制作完整配置清单。认证和更多字段见 [连接信息模板](skills/ascend-multinode-comm/references/remote-server-audit.md)。
-
-提供账号密码并要求普通连接时，agent 先通过 SSH 密码提示登录，不要求提前准备密钥或独立核对首次指纹；采用正常首次连接信任，主机密钥变化时仍停止核实。密码只用于认证交互，不复述、不写入命令参数、脚本或报告。若用户要求后续免密，密码登录后创建本地专用密钥、向指定服务器追加公钥并逐台验证，保留已有登录方式。详见 [登录与密钥配置流程](skills/ascend-multinode-comm/references/remote-server-audit.md#2-建立-ssh-连接密码优先按用户选择)。
-
-只检查宿主机网络时不必提供容器/部署脚本。IP、账号和认证方式齐全即可开始；不进入容器、不把 SSH 端口可达当成服务器之间全部通信已通过。
-
-新增独立 `fabric_probe.py`：自动发现已知格式的设备映射、采集 HCCS/vNIC/Pod 与 RoCE/UB 证据；针对明确设备对执行有界 HCCS 小包，识别跨域重复地址和“rc=0 但丢包”的失败。支持 1～64 节点取证和显式 SSH 密钥路径，默认只采集/计划，`--execute` 才发小包。详细用法见 [宿主机设备检测](skills/ascend-multinode-comm/references/host-fabric-detection.md)。不提供通用 UBoE 自动判型，不把 HCCS_SW 或 fullmesh 算法当成物理全连接证明。
-
-新增独立 `service_workflow.py`：读取严格配置后生成可人工审阅的 plan；会执行远端探针或改变状态的 `status/launch/test/tune/stop` 需要显式 `--execute` 与匹配的 `plan_sha256`。计划同时绑定配置、通信证据和工作流实现。它核对 P/D 的 DP×TP×PP 和实例设备映射、完整软件指纹、特性约束、真实入口 SHA256、完整 case 计数、失败请求数、服务日志与测试后健康；调优先跑 baseline，最多 32 个显式候选，默认只推荐 best。同一依赖 wave 使用“supervisor 先发布所有权、全部激活后再并发等健康”的两阶段启动；服务以完整规格和 128-bit run ID 精确回滚，测试前后拒绝 run ID 漂移。控制端在远端动作前预留且保护报告路径，验收正则和远端 transport 都有可终止边界，子集测试只记为 `PARTIAL`。工具不创建容器、不清理其他人的进程，也不接受明文凭据、shell 字符串或模糊杀进程。示例见 [`service-workflow.json`](skills/ascend-multinode-comm/examples/service-workflow.json)，完整流程见 [工作流指引](skills/ascend-multinode-comm/references/service-lifecycle.md)。
-
-### 场景一：服务启动前通信预检
+## 推荐流程
 
 ```text
-准备在这些服务器上部署服务，请直接连接现场做启动前通信预检。
-服务器：逐项提供 IP/SSH 别名、端口、用户名、认证方式。
-各节点容器：xxx；工作目录：xxx；服务部署脚本：xxx。
-工作目录和脚本都在服务器的指定容器内；相对脚本路径相对于该工作目录。
-服务尚未启动；请从远端脚本分析混部/PD 分离/池化及实际通信组。
-先检查脚本与现场网卡、IP、路由、设备和容器配置，指出可能影响建链的问题。
-主动探针、临时监听器及占卡打流前，请确认测试范围、空闲卡、端口和时间窗。
-不要执行服务部署脚本；请报告已验证阶段、失败原因和仍需启动后验收的项目。
+analyze（纯离线理论候选）
+  → verify（一次最小启动、正确性和代表负载）
+    → quick（锁定版本/资源，小量高收益候选）
+      → exhaustive（拓扑→特性→数值→全量E2E→重复/长稳）
 ```
 
-预检顺序：核实目标运行上下文与计划部署 → 还原通信关系、检查脚本 → 获取网卡/IP 和设备/拓扑证据 → 在授权范围运行分阶段探针 → 报告覆盖范围、异常与剩余验收项。服务未启动、没有 worker 或故障日志属于正常前提；生产端口尚未监听不能直接判为网络故障。预检不授权启动完整模型服务，实际 KV/MC2 或模型请求未执行时继续标为未验证。
+理论候选达到目标时可以在 verify 后结束。`quick` 和 `exhaustive` 不是简单放大 `max_trials`：后者按阶段推进，每阶段仍最多 32 个显式候选，阶段间重新生成、审阅和批准 plan。当前 `service_workflow.py` 是安全的有限候选执行器，不冒充自适应搜索器。
 
-### 场景二：服务当前建链失败，现场排障
+性能比较采用一个主指标和硬门槛：失败请求为零、精度与稳定性通过、无 OOM/device fault/EngineDead/KV 致命错误，并满足用户 TTFT/TPOT、显存余量等 SLO。输入/输出长度、并发和 Prefix 口径在候选之间固定，不能通过降低测试负载制造提升。
 
-```text
-这些服务器上的服务目前建链失败，请直接连接现场排查。
-服务器：逐项提供 IP/SSH 别名、端口、用户名、认证方式。
-各节点容器：xxx；工作目录：xxx；服务部署脚本：xxx。
-工作目录和脚本都在服务器的指定容器内；相对脚本路径相对于该工作目录。
-错误/日志位置：已知则提供，未知请从当前容器和远端脚本查找。
-请先保留现有故障现场，修改、重启或新增占卡测试前说明影响并确认。
-```
+## 工具
 
-排障顺序：连接并核实各节点执行上下文 → 关联现有日志的最后成功/首个失败点 → 对照脚本与实际 worker、网络/设备状态 → 选择最小现场验证 → 给出原因、证据、最小修复和复测建议。不会拿到远端路径后要求先下载上传，也不会以静态扫描或一份通用检查清单代替实际排查。
+| 工具 | 用途 | 是否会连接或改变远端 |
+|---|---|---|
+| `scripts/parallelism_advisor.py` | 枚举显式合法的 P/D DP×TP×PP，在给定并发负载下按 TTFT、TPOT、output/request throughput、goodput 或 balanced 目标排序 | 否；纯离线，只输出 `THEORY_ONLY` 候选 |
+| `scripts/preflight.py` | 容器/宿主通信发现、分阶段主动探针、gate 和卡对隔离 | `inspect` 只读；`check/pairs` 会在授权资源上运行短时探针 |
+| `scripts/fabric_probe.py` | 宿主设备映射、HCCS/vNIC/Pod/SDID 与有界设备小包 | `inspect` 只读；显式 `--execute` 才发包 |
+| `scripts/service_workflow.py` | 严格 plan、服务生命周期、E2E 测试和单阶段有限寻优 | `validate/plan` 本地；其余动作需 `--execute --approve` |
+| `scripts/hccl_bench.py` | 生成或执行官方 HCCL Test MPI 计划 | 默认只生成；显式 `--execute` 才运行 |
+| `scripts/audit_deployment.py` | 对已有本地文本做辅助静态审计 | 否；不能替代现场检查 |
 
-普通取证不修改配置、重启或重跑部署脚本。新增监听器、通信测试进程和 NPU 打流需明确空闲资源与授权；用户明确只读时保持只读。整个流程使用可用的 SSH/服务器连接能力，现有 `preflight.py` 则服务于后续受控测试，其 `BatchMode=yes` 不支持直接弹出密码输入。
+工具不创建/删除容器，不重置 NPU，不按名称、端口或 `pkill/killall` 模糊清理服务。生命周期工具只停止具有 deployment、service、规格哈希、boot ID、PID/starttime、进程组和 run ID 所有权证据的进程。
 
-### 辅助场景：明确只分析本地附件或已采集文本
+## 快速开始
 
-只有用户选择本地分析，或远端取证已生成必要本地文本时，才使用这个入口。它不是远端预检或排障的前置条件。助手核对调用链、变量生效顺序与通信域，指出文件行号、影响阶段、成立条件和修复建议；工具自动解析静态 shell 子集，复杂 shell/Python/Compose/K8s 由助手继续分析。
+### 1. 先做并行策略分析
+
+复制公开 sidecar，填写脱敏且已核实的版本、角色卡预算和合法范围：
 
 ```bash
-cd skills/ascend-multinode-comm
-python scripts/audit_deployment.py --root examples/audit-demo \
-  --manifest examples/audit-demo/manifest.json --out reports/audit-demo.json
+cp skills/ascend-multinode-comm/examples/parallelism-advisor.json \
+  skills/ascend-multinode-comm/examples/parallelism-advisor.local.json
+
+python skills/ascend-multinode-comm/scripts/parallelism_advisor.py \
+  --config skills/ascend-multinode-comm/examples/parallelism-advisor.local.json \
+  --out reports/parallelism-advice.json
 ```
 
-此样例故意包含错误，预期退出 1，并报告重复 HCCL_IP、DP 区间重叠、非法端口。工具生成 JSON + 中文 Markdown。审计真实上传目录时替换 root；manifest 可省略，分组关系明确后再做跨节点比较。工具不执行上传脚本，静态无报错也不会给出建链 PASS。报告和真实上传内容不要提交仓库。
+以下命令中的 `python` 表示 Python 3.10+；Windows 未配置该命令时可使用 `py -3` 或解释器绝对路径。
 
-### 共用工具：预检与经授权的定向验证
+例如 P、D 各写 32 张卡时，`hardware.cluster_devices` 至少为 64。`tp_sizes/pp_sizes`、`minimum_replica_devices` 和兼容约束必须来自当前模型/版本、容量计算或同口径历史证据，不能为了得到预想拓扑倒填。输出只用于生成或修改用户同风格脚本，执行前仍需重新 plan。
+公开样例保留 `fill-current-*` 占位符，因此直接运行只会得到 `DRAFT_RECOMMENDATION`；填完环境指纹并重新运行后，状态才可能是 `RECOMMENDED_FOR_VALIDATION`。
 
-控制端：Python 3.10+、OpenSSH。被测环境：Linux、bash、Python 3.10+、iproute2；collective 需要当前服务使用的 torch/torch_npu/CANN。无需在控制端安装 torch。
+### 2. 通信预检
 
 ```bash
-cd skills/ascend-multinode-comm
-cp examples/cluster.json examples/cluster.local.json
-# 编辑真实容器名、workdir、可选 container_user、卡列表、环境脚本、业务 CIDR 和空闲测试端口。
-# env_scripts 在目标容器内 source；宿主机上的路径不自动出现在容器里。
-python scripts/preflight.py inspect --config examples/cluster.local.json --out reports/inventory.json
-python scripts/preflight.py check --config examples/cluster.local.json --out reports/check.json
-python scripts/preflight.py gate --report reports/check.json --scope primitives
+cp skills/ascend-multinode-comm/examples/cluster.json \
+  skills/ascend-multinode-comm/examples/cluster.local.json
+
+python skills/ascend-multinode-comm/scripts/preflight.py inspect \
+  --config skills/ascend-multinode-comm/examples/cluster.local.json \
+  --out reports/inventory.json
 ```
 
-`inspect` 只有发现阶段，退出码通常为 2（未完整验证），不是执行错误。`check` 默认也保留 `model_e2e=UNVERIFIED`，基础通过后用 `gate --scope primitives` 查看基础范围；不能把它叫作服务完整验收。服务起来后需同镜像、同配置的真实请求以及相应 KV/MC2 适配器。
+`inspect` 通常返回 2，表示仍有未验证层，不是执行错误。主动 `check`、卡对、HCCL、MC2 和 KV 验证前需确认空闲卡、端口、时间窗与影响范围。
 
-`examples/cluster.json` 仅展示结构：按现场增删 nodes/groups，填写真实 SSH 目标、容器、工作目录和选定空闲卡；`[0]` 只是最小卡列表示例。SSH 占位符未替换会在连接前报错。示例不设置现场 CIDR、环境脚本路径或 fullmesh；根据当前证据填写 CIDR/地址、必要 env_scripts 和 environment，不能沿用文档中的节点身份。`platform: auto` 保守识别实时型号；未知不会自动认作 A3 或 A5，声明平台也不能代替硬件证据。
-
-两机所有选定卡对：
+### 3. 服务计划和执行
 
 ```bash
-python scripts/preflight.py pairs --config examples/cluster.local.json --out reports/pairs.json
-python scripts/preflight.py gate --report reports/pairs.json --scope pairs
+python skills/ascend-multinode-comm/scripts/service_workflow.py validate \
+  --config /secure/local/deployment.local.json
+
+python skills/ascend-multinode-comm/scripts/service_workflow.py plan \
+  --config /secure/local/deployment.local.json \
+  --out reports/deployment-plan.json
 ```
 
-8×8 会依次运行 64 个两 rank 通信域；耗时显著，先单卡验证，再选空闲窗口全量运行。每个卡对校验 AllReduce、AllGather、AllToAll 的数值。它证明的是逻辑卡对可通信，不证明两卡之间有一根直连光纤。
+人工核对 plan 后，`launch/status/test/tune/stop` 才使用匹配的 `--execute --approve PLAN_SHA256`；`stop/tune` 还要求再次确认 deployment。完整配置与命令见 [服务生命周期](skills/ascend-multinode-comm/references/service-lifecycle.md)。
 
-### MC2 通算融合算子单独检测
+## 参考资料
 
-不仅测试普通 AllGather/AllToAll，还按算子列出 MC2 cases：
+### 性能、部署与样本
 
-- 已接入三类真实 API 调用：Matmul-AllReduce、AllGather-Matmul、Matmul-ReduceScatter。内置探针只覆盖非量化 eager 小形状，必须先核对当前芯片/版本/组网支持，不宣称所有 A3/A5 组合都可运行。
-- AllToAll-Matmul、Matmul-AllToAll、分组/量化融合、MoE Dispatch/Combine、Fused MoE/MegaMoE、图模式使用各自的版本化测试适配器；由 agent 在现场查找已有测试或按确认的 API 补齐，不以普通 collective 替代。
-- 每个算子记录通信域、rank/卡映射、执行阶段、重复次数、数值校验与异常；一项通过不会覆盖另一项失败或未测。
+- [PD 并行推导、OOM、特性和验收规则](skills/ascend-multinode-comm/references/vllm-pd-operations.md)
+- [服务生命周期与 analyze/verify/quick/exhaustive](skills/ascend-multinode-comm/references/service-lifecycle.md)
+- [官方部署配方索引](skills/ascend-multinode-comm/references/official-deployment-recipes.md)
+- [单机/双机/多机场景示例](skills/ascend-multinode-comm/references/scenario-examples.md)
+- [成功样本的选择、脱敏和归档](skills/ascend-multinode-comm/references/known-good-deployments.md)
 
-将 [MC2 清单模板](skills/ascend-multinode-comm/examples/mc2-cases.json) 按 [MC2 指南](skills/ascend-multinode-comm/references/mc2-testing.md) 合入本次配置并核实资源后，运行 `check`，再用 `gate --scope mc2` 查看显式算子清单是否完整通过。`primitives` 通过不代表 MC2 通过；MC2 通过也不替代真实模型请求和 PD/KV 验收。
+### 通信、硬件与故障
 
-## 配置要点
+- [通信阶段矩阵](skills/ascend-multinode-comm/references/communication-stages.md)
+- [A3/A5 平台分支](skills/ascend-multinode-comm/references/platform-a3-a5.md)
+- [拓扑和配置文件](skills/ascend-multinode-comm/references/topology-and-files.md)
+- [宿主机设备网络检测](skills/ascend-multinode-comm/references/host-fabric-detection.md)
+- [HCCL 检测](skills/ascend-multinode-comm/references/hccl-testing.md)
+- [MC2 算子级检测](skills/ascend-multinode-comm/references/mc2-testing.md)
+- [现场故障手册](skills/ascend-multinode-comm/references/failure-playbook.md)
+- [仿真与验收边界](skills/ascend-multinode-comm/references/simulation-and-gates.md)
 
-- `nodes[].platform` 可为 `auto`（默认）、`A3`、`A5`，用于与实时型号比对；不指定镜像、卡数或算法默认值。身份矛盾或同组混合平台会暂停主动测试；识别不全可以执行通用基础探针，但不会执行 MC2 或通过 mc2/service gate。独立 P/D 组的平台可不同，跨平台 KV 支持仍需另证。详见平台指南。
-- `nodes[].ssh` 只用于管理入口，可用 SSH config 别名。CLI 没有密码字段；先正常密码登录，用户要求免密时配置专用密钥/精准别名后再使用批量工具。首次连接可用 accept-new，仍保留密钥变化检查。
-- `nodes[].container` 不填即宿主机；工具不新建容器。`env_scripts` 在该运行环境内生效。
-- `nodes[].workdir` 是该运行环境内的 Linux 绝对目录，在 source 和探针启动前生效。`container_user` 可指定已核实的容器服务用户名/UID（可带组），仅用于有 container 的节点；不自动切到 root。未设置时保留原来的执行上下文，不能声称已与 worker 对齐。
-- `nodes[].ssh: local` 只支持当前 Linux 宿主执行，不进入容器；需要容器就使用明确 SSH 目标。现场诊断节点数不固定；现有主动探针单次 2～64 节点，`pairs` 一次两个节点仅为卡对隔离工具的限制。
-- CPU-only 存储/入口节点可设 `role: store` 或 `role: router`，`devices: []`，不加入模型 groups。
-- `devices` 是 torch 在当前可见设备掩码下的逻辑编号；可选 `physical_devices` 才是 hccn 查询编号。通过 npu-smi 映射核对，不能默认二者相同。
-- `data_ip: auto` 配合现场确认的 `fabric_cidr` 主动找唯一 UP 网卡；多解/无解报错。不要由管理地址尾号猜业务地址。
-- `groups` 是待验收通信域列表。PD 分离中 P 与 D 分开定义，必要时为 TP/EP/PP 子域分别建配置；工具不会从模型参数自动推断所有子域。
-- `environment` 可设置 `HCCL_ALGO=level0:fullmesh`、`HCCL_BUFFSIZE`、`HCCL_OP_EXPANSION_MODE` 等；不按平台写入默认值，也不会默认写 HCCL 端口范围。网卡/IP 自动按节点设置；P/D 环境不同需分配置测试，不能用全局 environment 覆盖组间差异。
-- `tcp_ports` 是明确允许临时监听的测试端口，默认两个探针端口不覆盖所有生产端口。扩展为真实服务端口前确保没有在线服务占用；动态分配端口仍需真实 connector 验证。
-- `mode` 可选 `colocated` / `disaggregated` / `pooled`。混部也可能启用远程 KV，见通信指南，不能只凭模式名跳过 KV。
-- `adapters` 是真实版本的自定义可执行程序；具体契约见验收指南。没有适配器不会自动填 PASS。
-- `require_mc2: true` 配合 `mc2_cases` 列出每个需要验证的算子/通信组/模式。builtin 和逐 case adapter 可混合，不能与旧式 `adapters[].stage=mc2` 混用；缺失 case、资源或版本证据不应放行。
+### 接入与静态分析
 
-## 结果与安全边界
+- [SSH 与现场排障指引](skills/ascend-multinode-comm/references/remote-server-audit.md)
+- [部署脚本分析规则](skills/ascend-multinode-comm/references/deployment-script-audit.md)
+- [手动通信测试](skills/ascend-multinode-comm/manual-tests/README.md)
 
-退出码：0=所声明完整范围通过；1=检测失败；2=缺少证据/未做。`gate` 默认拒绝超过一小时的报告；配置、镜像、网卡、拓扑、卡分配或占用变化后必须重测。配置指纹只是追溯信息，不是防篡改签名。
+密码、私钥、令牌、真实地址、现场路径、原始脚本和日志不进入 Git。公开仓库只保存脱敏结构、条件化经验和合成测试数据。
 
-工具会创建短时监听器、NPU collective 和自有子进程，需要用户授权的节点、空闲卡与端口。它不改防火墙、路由、时钟、拓扑文件，不杀用户服务。SSH 中断后远端 watchdog 在超时上限内回收自有 worker；内核不可中断任务、MPI 外部远端 daemon 等不能承诺即时清理，需现场核验。
+## 验证状态
 
-报告可能包含 IP、文件摘要、进程错误和拓扑信息，`reports/`、`*.local.json`、日志不入库。发布示例仅用待填写占位符、通用节点名或测试用文档地址，不是预设待连接目标；执行目标必须来自用户本次清单。
-
-## 需要提供很多成功脚本吗
-
-不需要。先使用 [官方配方索引](skills/ascend-multinode-comm/references/official-deployment-recipes.md)：整理 A3/A5 单机及多节点混部、Mooncake/GLM-5/DeepSeek-V4 PD 分离、Mooncake 与 Memcache 池化配方，附官网、固定源码及实际脚本定位。基线是 v0.23.0 官方提交，具体平台和依赖边界逐项保留；A2 混部示例与旧 EP 教程单列参考，不冒充 A3/A5 现场成功。
-
-官方基线不能覆盖的变体，再补充已有代表案例即可。给服务器连接信息、容器、工作目录和远端入口，最好附成功时间与真实请求日志路径，其余依赖/版本由 agent 在授权范围发现；不要求用户先整理或上传整套脚本。
-
-样本用于提炼有条件的检查规则，不直接复制成默认模板。进程启动或 health=200 不代表 KV/MC2 已执行，历史成功也不保证当前环境可用。原始脚本/日志不自动推送仓库，密码不进聊天；具体字段与处理边界见 [成功部署样本指引](skills/ascend-multinode-comm/references/known-good-deployments.md)。
-
-## 在不同 agent 中使用
-
-保留 `skills/ascend-multinode-comm` 整个目录，包括 `SKILL.md`、`scripts/`、`manual-tests/`、`references/` 和 `examples/`：
-
-- agent 支持加载 `SKILL.md` 技能包时，按该产品的技能加载机制添加本目录；安装位置和触发方式以该产品为准，不要求统一的目录或调用语法。
-- 没有技能加载器但支持读文件时，将本目录交给 agent，要求先读取 `SKILL.md`，按任务选读引用文档，再使用自身可用的 SSH/命令执行工具。无需把所有参考资料一次性粘贴进提示词。
-- 只有对话、不能读取本地文件或连接服务器的 agent，不能独立完成现场预检/排障。应说明缺失能力，由用户选择提供可用访问方式，或改为分析脱敏采集结果；不得声称已连接、已实测。
-
-可用的通用调用说明：
-
-```text
-请读取提供的 ascend-multinode-comm/SKILL.md，并按我的任务选择预检或排障流程。
-使用你当前实际可用的服务器连接和命令执行能力，在指定远端容器/目录内检查。
-节点、容器、脚本、认证方式和测试范围见本次信息；缺少能力或权限请明确指出。
-```
-
-Codex 只是可选宿主之一；该宿主的个人技能目录 `.codex/skills/` 是一种安装示例，不是本仓库通用路径。其他 agent 不需要此目录，也不依赖 Codex 专属 API。具体产品的自动发现、认证交互与远端执行兼容性仍需在所用环境核实，本库未逐一验收。
-
-也可以不通过 agent，直接运行上面的 Python CLI；运行前仍需准备 SSH、目标环境和测试授权。
-
-## 本地测试
+本仓库包含标准库单元测试与少量历史现场证据，但本地开发机无 NPU。mock、静态分析或理论排序不能称为真实 SSH、容器、HCCL/MC2/KV、模型精度或性能通过。详见 [验证记录](docs/validation.md)。
 
 ```bash
-# 在仓库根目录运行，无第三方依赖
 python -m unittest discover -s tests -v
 ```
-
-本仓库以中文为主，参数名/协议名保留英文。没有引入旧工作区的密码、聊天原文或现场日志，也没有修改原来的服务启动脚本。

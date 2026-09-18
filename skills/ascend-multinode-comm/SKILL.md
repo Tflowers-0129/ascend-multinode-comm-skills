@@ -1,28 +1,32 @@
 ---
 name: ascend-multinode-comm
-description: 面向 Ascend A2/A3/A5 与 vLLM-Ascend 的单机/多机通信预检、现场排障，以及在用户明确配置与执行授权下的服务拉起、有限参数寻优和 E2E 验收。按实时平台/版本及 HCCS/RoCE/UB 路径检查 TCPStore/Gloo/HCCL、MC2 与 PD/KV 通信；建链失败时结合日志、实际进程和网络设备状态定位原因。支持混部、多 DP、PD 分离、辅助脚本分析和成功案例提炼；远端脚本不要求上传，不绑定特定 agent。
+description: 面向 Ascend A2/A3/A5 与 vLLM-Ascend 的并行策略分析、配置推荐、通信预检、现场排障，以及在用户明确授权下的服务拉起、quick/exhaustive 有界寻优和 E2E 验收。按实时模型、负载、平台、版本及 HCCS/RoCE/UB 路径分析 DP/TP/PP/EP，检查 TCPStore/Gloo/HCCL、MC2 与 PD/KV 通信；支持混部、多 DP、PD 分离和成功案例提炼，不绑定特定 agent。
 ---
 
-# 昇腾单机/多机通信预检与现场排障
+# Ascend 单机/多机通信、服务与性能
 
-目标：在用户指定服务器上，启动前发现影响建链的配置与通信问题，或在建链失败后定位到节点、容器、阶段、rank、链路与配置来源。两者按用户意图选择，不默认已经发生故障。节点数量与通信分组来自现场，不限定为两台，也不默认所有节点配置相同。
+目标：先按用户指标和现场约束生成可解释的并行候选；需要现场操作时，再在指定服务器上做通信预检、定位故障，或按精确所有权拉起、测试和有界寻优。理论推荐、通信证据、服务健康、正确性和性能结论分层记录，不能互相替代。节点数量与通信分组来自现场，不限定为两台，也不默认所有节点配置相同。
 
 本技能不依赖特定 agent 品牌或专属 API。使用当前 agent 实际具备的文件读取、SSH/服务器连接和命令执行能力；先核实能力与权限，缺少时明确报告，不能把文档步骤或本地分析冒充现场执行。
 
-## 先选择入口
+## 五个主能力
 
-| 用户意图 | 行为 |
+| 能力 | 何时使用 | 入口与产物 |
+|---|---|---|
+| 理论规划 | 用户关心 TTFT、TPOT、吞吐、并发或长上下文，希望先得到脚本方向 | 读 [PD 指标驱动推导](references/vllm-pd-operations.md#按目标指标先推导并行策略)，用 `parallelism_advisor.py` 对已核实的合法范围生成首选/备选、理由、假设和最小验证计划；不连接服务器，不称为实测结果 |
+| 通信预检 | 服务未启动，需验证计划配置、容器网络和通信域 | 按“启动前通信预检”，逐层验证 Host、TCPStore/Gloo、HCCL、MC2、PD/KV；未执行的层保持 `UNVERIFIED` |
+| 现场排障 | 服务已失败、卡住或部分 rank 异常 | 按“现场建链排障”保留现场，从最早失败阶段和对端证据定位；修改、重启和占卡验证需相应授权 |
+| 服务生命周期 | 用户明确要求启动、状态检查、停止或运行测试 | 读 [配置驱动工作流](references/service-lifecycle.md)，用严格配置、plan SHA、artifact 哈希和 run ID 只管理本工具拥有的进程 |
+| 性能验证与寻优 | 理论候选需要校准，或用户要求快速/深度优化 | 按 [analyze → verify → quick → exhaustive](references/service-lifecycle.md#优化层级analyze--verify--quick--exhaustive)；一个主指标加正确性、SLO、显存、稳定性硬门槛，每阶段最多 32 个显式 trial |
+
+## 辅助入口
+
+| 场景 | 入口 |
 |---|---|
-| 用户希望自己手动做 HCCL 打流，或从 Python/torch 调用通信算子 | 先读 [手动通信测试](manual-tests/README.md)，给出与现场版本匹配的最小命令；普通 collective 与融合 MC2 分开验证 |
-| 这些服务器、容器、工作目录和部署脚本，服务启动前验证通信 | 按下方“启动前通信预检”流程，从远端计划配置与现场环境出发，明确空闲卡、端口与时间窗；不要求故障日志或现有 worker |
-| 这些服务器、容器、工作目录和部署脚本，当前建链失败，请排查 | 按下方“现场建链排障”流程及 [现场排障指引](references/remote-server-audit.md)，读取远端脚本、日志和实际状态，按失败阶段定位 |
-| 给出服务器账号/IP，只检查宿主机之间的连接 | 直接建立 SSH 会话，检查宿主网卡/IP、路由、地址解析和目标间的有界连接；不要求容器或部署脚本，不将 SSH 可达外推为 HCCL/业务通过 |
-| 判断这些服务器是 RoCE/UBoE/FullMesh 组网，以及 NPU 能不能通 | 读 [宿主机设备网络检测](references/host-fabric-detection.md)，自动发现设备映射、HCCS/vNIC/Pod 与其他网络证据，再对本次明确设备边做有界测试；不要漏掉 HCCS，也不将算法当物理拓扑 |
-| 明确只分析本地附件、不连接服务器 | 辅助静态审计；不能据此诊断当前现场状态 |
-| 先找官网部署脚本、建立 A3/A5 参考基线 | 读 [官方配方索引](references/official-deployment-recipes.md)，按平台/模式/版本选择官网代码块和固定源码；无需先索要现场成功脚本，不执行部署 |
-| 给出单机混部/PD 分离、双机或多机多 DP/PD 分离示例 | 读 [六类场景示例](references/scenario-examples.md)，提供对应拓扑、官方脚本入口及现场请求；区分官方配方、扩容算例和工具限制，不执行部署 |
-| 给出远端已成功部署的脚本，希望提炼检查规则 | 按 [成功样本指引](references/known-good-deployments.md) 只读提取有版本和验收证据的规则，不重跑服务，不把原始内容推送仓库 |
-| 用户提供节点、容器、P/D 配置和已有启动/测试脚本，要求拉起、寻优或自动测试 | 先读 [PD 运维规则](references/vllm-pd-operations.md)，再按 [配置驱动工作流](references/service-lifecycle.md) 生成严格本地配置与 plan；服务变更、压测和寻优必须显式执行并匹配 plan SHA，只管理本工具拥有的进程 |
+| 用户手动运行 HCCL Test 或 torch collective | [手动通信测试](manual-tests/README.md)，普通 collective 与融合 MC2 分开 |
+| 只检查宿主网络，或判断 HCCS/RoCE/UBoE/FullMesh 与设备互通 | [宿主机设备网络检测](references/host-fabric-detection.md)；SSH 可达不外推为 HCCL/业务通过 |
+| 查官方基线、常见场景或历史成功样本 | [官方配方](references/official-deployment-recipes.md)、[场景示例](references/scenario-examples.md)、[成功样本](references/known-good-deployments.md)；都只是带条件先验 |
+| 明确只分析本地附件、不连接服务器 | 读 [脚本分析规则](references/deployment-script-audit.md) 做辅助静态审计，不据此诊断当前现场状态 |
 
 用户在服务器场景中“提供脚本”即提供远端路径；不要要求先下载、上传、复制到本地，或先制作审计 manifest。若给出容器，工作目录默认按该容器内路径理解，脚本相对路径相对于该目录；核查实际存在性，必要时澄清宿主/容器边界，不擅自换一个同名文件。
 
@@ -53,6 +57,7 @@ description: 面向 Ascend A2/A3/A5 与 vLLM-Ascend 的单机/多机通信预检
 
 仅当用户明确要求启动、停止、测试或调优时进入本流程；“检查/排障”本身不授权修改服务。完整配置、命令和状态边界见 [配置驱动工作流](references/service-lifecycle.md)，本次 A2/GLM 类问题形成的条件化经验见 [PD 运维规则](references/vllm-pd-operations.md)。
 
+0. 若用户尚未固定并行策略，先按模型容量、单机快速互联域、P/D 设备预算、版本/connector 合法范围、固定负载和主指标做纯离线分析。输出排序靠前候选，并保留用户已有 baseline 或人工选择的资源余量型备选，列出假设与置信度；用 `parallelism_advisor.py` 时，allow-list 和最小单副本卡数必须有版本、容量或历史证据。理论候选只需一次最小 verify 就可能满足需求，不强制长时间 tune。
 1. 从现场已有脚本和只读状态建立 `service-workflow` 本地配置。明确 P/D 的 DP、TP、PP、每个 DP instance 的节点/设备、完整版本指纹、engine 参数、prefix cache/池化/fused MC2/multistream、Proxy、健康与测试判据。A2 deployment profile 不等于现有 preflight 平台 gate 已认证；按工具实际支持范围保留 UNVERIFIED。
 2. 原脚本不直接改写；需要调整时先复制，保持用户已有纯 Bash 格式，只暴露必要 argv/env 参数。入口以前台进程运行并绑定远端 SHA256；后台化且无法返回结构化所有权证据的脚本只能 plan/manual，不能自动循环重启。
 3. 先 `validate`、再 `plan`，核对计划中的精确节点、容器、卡、依赖 wave、artifacts、测试和候选。若配置要求通信门禁，绑定同一通信域的新鲜 preflight 报告。计划同时绑定配置、证据和工作流实现；配置、脚本、报告或实现变化后 plan SHA 作废。
@@ -73,6 +78,8 @@ manifest 可省略；没有明确分组时不跨文件断言 rank/端口冲突�
 
 ## 工具
 
+下列 `scripts/`、`examples/` 和 `references/` 相对路径均以本技能目录为基准；从仓库根目录运行时加前缀 `skills/ascend-multinode-comm/`。
+
 [手动通信测试](manual-tests/README.md)：面向用户直接执行，包含简洁的 MPICH/Hydra + 官方 HCCL Test 双机脚本，以及 `torch.distributed` HCCL collective 的 Python 脚本。复现现场问题时优先沿用用户已有官方教程，只替换当前路径、网卡、hostfile、rank 和设备号。
 
 `scripts/fabric_probe.py`：独立的宿主机网络入口；`inspect` 只采集，`ping` 默认只生成明确设备对的计划，`--execute` 才执行有界 HCCS 小包。自动解析已知 npu-smi 映射格式、逐设备 vNIC/Pod/SDID，检查跨域地址重叠与真实收发统计；支持显式 SSH `identity_file`。不依赖完整平台型号识别，不进入容器或 source，不运行 HCCL/MC2。具体参数、未知格式与 RoCE/UBoE 自动化边界见 [检测指南](references/host-fabric-detection.md)。
@@ -88,6 +95,8 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 ```
 
 `scripts/hccl_bench.py`：从重复的 `--host` 参数生成 MPI hostfile 并计算总 rank 数；必须指定实际 `--directory`，以及 `--source` 或 `--inherit-env`。`--execute` 才运行，默认小流量，1G 必须显式选择。`scripts/preflight.py pairs` 每次隔离一对选定节点，按各自卡列表做笛卡尔积；节点身份、卡数都来自本次配置，不把多 rank collective 冒充独立卡对覆盖。
+
+`scripts/parallelism_advisor.py`：纯离线并行策略分析器。严格读取脱敏 sidecar，核对集群/P/D 卡预算，枚举显式允许的 DP×TP×PP，按声明过滤 TP 超过单机容量、P/D TP 比例和 Decode PP 等约束，再在给定并发负载下按 TTFT、TPOT、output/request throughput、goodput 或 balanced 目标输出可解释的理论候选。`TP <= 单机卡数` 只是 placement 的必要条件，工具不证明实例已正确装箱。它不含 SSH、网络或子进程执行能力，不读取服务凭据，不预测真实数值，也不直接修改 `service-workflow` 配置。样例见 `examples/parallelism-advisor.json`。
 
 `scripts/service_workflow.py`：配置驱动的长时服务生命周期、测试和有界寻优工具，与 `preflight.py` 分离。`validate/plan` 只处理控制端数据；会执行远端健康命令的 `status` 以及 `launch/test/tune/stop` 均需要 `--execute` 与当前 `plan_sha256`，stop/tune 还需确认 deployment 名称。严格拒绝秘密字段、未知字段、shell 字符串和模糊杀进程；执行前复核远端 artifacts，测试前后复核全部服务健康与 run ID，并对 Windows 控制端命令长度预先失败关闭。示例见 `examples/service-workflow.json`，详细限制见 [工作流指引](references/service-lifecycle.md)。
 

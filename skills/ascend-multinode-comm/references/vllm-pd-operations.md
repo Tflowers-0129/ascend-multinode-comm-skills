@@ -51,6 +51,37 @@ role_world_size = DP × TP × PP
 
 若计划设备数与现场可见卡数不相等，先停止启动。典型错误包括 DP start rank 重叠、某节点 local size 不一致、PP stage 缺失、不同节点看到的设备顺序不同，以及同一端口被两组 rendezvous 复用。
 
+### 按目标指标先推导并行策略
+
+不要一开始穷举所有 DP/TP/PP。先把模型可运行条件、角色设备预算、单机快速互联域、版本兼容范围和固定负载写成事实，再按目标指标生成首选与保守候选。离线辅助工具见 [`parallelism_advisor.py`](../scripts/parallelism_advisor.py)，公开输入样例见 [`parallelism-advisor.json`](../examples/parallelism-advisor.json)。它只枚举用户已核实的合法范围并给出可解释排序，不连接服务器、不生成服务命令，也不把理论候选称为已验证结果。
+
+常见先验如下，但都必须附带成立条件：
+
+- P 处理批量输入 token，长 Prompt/TTFT 目标通常偏向较强的单副本 TP；当大 TP 会跨节点做频繁 collective，而模型支持 PP、并发或 Prefill chunk 足以填充流水线时，可用节点内 TP 加跨节点 PP。低并发、短输入或 stage 不平衡时，PP bubble 可能更差。
+- P 的 DP 不应固定为小值。P 排队、短 Prompt 高 QPS 或 Prefix 命中率低导致的未缓存输入量很大时，应增加 P 副本；单请求 Prefill 计算或长上下文是主瓶颈时，再优先增强 TP/PP。
+- D 在高并发、output throughput 目标下，通常选择满足模型、KV 显存、算子支持和 TPOT 门槛的较小 TP，再用剩余设备增加 DP。DP 不是越多越好：它会复制模型、减少每个副本的卡数和批量，可能损害 KV 容量、单请求 TPOT、kernel 效率或 EP/路由均衡。
+- 低并发且 TPOT 优先时，D 可能需要更大的 TP 和更少的 DP；长输出、高并发时才更偏向更多 D 副本。P/D 的最优形态不要求相同。
+
+用固定负载先估算两侧的相对压力：
+
+```text
+P_load_proxy = QPS × 平均未缓存输入 token 数
+D_load_proxy = QPS × 平均输出 token 数
+```
+
+这是工作量代理，不是把 Prefill 与 Decode 每 token 成本视为相同，也不是吞吐预测。`parallelism_advisor.py` 的 `mean_uncached_input_tokens` 已是缓存复用后的口径，`prefix_hit_rate` 只用于记录评测条件，不会再乘一次。真实容量还受模型结构、量化、KV、算子、通信和调度影响；当前分析器固定用户给定的 P/D 设备预算，角色卡数再分配必须在理论分析或一轮实测校准后显式提出。
+
+| 首要目标 | P 侧推导重点 | D 侧推导重点 |
+|---|---|---|
+| TTFT | 增强 P 单副本能力；节点内大 TP，跨节点时按条件考虑 PP；P 排队时再加副本 | 保持不会拖累端到端请求的基本容量 |
+| TPOT | P 不排队即可 | 增强 D 单副本能力，不能简单最大化 DP |
+| output/request throughput | 提供足够 Prefill 供给，避免入口饥饿或积压 | 在显存和 TPOT 门槛内采用较小 TP、较多 DP |
+| 长输入、低 Prefix 命中 | 增加 P 资源，评估 TP/PP、chunked prefill | 按输出量配置 |
+| 长输出、高 Prefix 命中 | P 容量可相对减少 | 增加 D 容量和可用 KV，重点检查路由均衡 |
+| 综合 goodput | 以用户 TTFT/TPOT/错误率 SLO 为硬门槛，平衡两侧队列 | 同左，不以单次峰值替代 SLO |
+
+历史成功脚本和结果只作为同平台、同版本、同模型、同负载下的先验，用于设置 allow-list、最小副本卡数和排除已知失败区；原始样本治理见 [成功样本指引](known-good-deployments.md)。目标机器上的最小启动、正确性和代表性负载仍是推广脚本前的必要校准。
+
 ## 3. 用版本配对保护可运行性
 
 vLLM、vllm-ascend、PyTorch/torch-npu、CANN、HDK/驱动和模型代码共同决定参数含义与算子路径。只比较 vLLM 或 vllm-ascend 的单一版本，不能解释全部差异。
@@ -75,6 +106,15 @@ Prefix cache 是请求调度/缓存能力；PD KV 传输或 KV 池化是跨角�
 - 修改一个开关后重新拉起相关角色，避免旧进程仍持有上一轮配置。
 - “请求成功”不证明命中缓存。若指标端点可用，记录命中率或复用 token；若指标端点不存在，把指标记为不可用，不将其误判为请求失败。
 - 压测数据必须真的包含预期比例的公共前缀，否则无法评价 prefix cache。
+
+### EPLB
+
+EPLB 是 MoE/EP 场景的专家负载再平衡能力，不是通用的 DP、TP 或请求路由开关。只有当前模型确实启用 EP、版本支持对应 controller/参数、并且实测存在专家热度倾斜时才把它列为候选。上游字段和 Ascend 分支会随运行器演进；先核对当前 [vLLM EPLB 配置](https://docs.vllm.ai/en/latest/api/vllm/config/parallel/) 与 [vLLM-Ascend EPLB 指引](https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/expert_parallelism_load_balancer.html)，不要把其他版本的 `window_size`、`step_interval`、冗余专家数、异步 communicator 或 load collection phase 直接复制过来。
+
+- 冗余专家会占额外显存；专家迁移和 balancedness 日志也可能增加通信或观测开销。先固定版本、EP 拓扑和负载，记录开启前后的专家热度、迁移事件、峰值显存、TTFT/TPOT、吞吐和失败请求。
+- P/D 分离时可因负载阶段不同而采用不同的采集/平衡策略，但必须由当前版本明确支持；不能从“P 长输入、D 长输出”直接推导某个字段值。
+- 没有通用证据表明 EPLB 与所有 fused MC2 冲突。只在当前版本文档、参数校验或复现实测证明互斥时禁止组合；否则以 baseline → 单开 EPLB → 单开 fused MC2 → 显式允许后再测组合的有界矩阵判断。
+- 当前 `service_workflow.py` 的 typed `features` 只覆盖 prefix cache、KV pool、fused MC2 和 multistream，不会自动验证 EPLB。使用 EPLB 时将已核实参数显式写入 engine argv/env，并在 pinned 值、版本指纹、启动日志与测试断言中留证；缺少生效证据时保持 `UNVERIFIED`。
 
 ### fused MC2 与 multistream
 
@@ -231,7 +271,7 @@ Aborted | timeout | rank | HCCL
 
 ## 11. 调参与寻优的停止条件
 
-寻优先固定一个已通过正确性验收的基线，再一次改变一个维度。每个候选至少运行相同预热和测试矩阵，并在以下任一条件满足时停止该方向：
+完整层级和 quick/exhaustive 语义见 [配置驱动工作流](service-lifecycle.md#优化层级analyze--verify--quick--exhaustive)。寻优先固定一个已通过正确性验收的基线；quick 优先一次改变一个维度，exhaustive 可在显式兼容范围内比较特性交互或拓扑组合。每个可比较候选至少使用相同预热和固定测试口径，并在以下任一条件满足时停止该方向：
 
 - 正确性、稳定性或目标长度不再满足；
 - 出现可复现 OOM、device fault 或通信异常；

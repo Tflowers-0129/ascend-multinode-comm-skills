@@ -158,3 +158,17 @@ MC2 指南新增 V2/V4 分层说明，补充固定提交的 op-plugin/kernel/til
 新的 supervisor 仅支持不自行后台化、不 double-fork/daemonize 且不逃离记录进程组的前台入口，并在目标 Linux 环境依赖 Python 3、`fcntl` 与 `/proc`。远端 artifacts 运行前校验 SHA256；同一 UID 在最后校验与按路径执行之间恶意替换仍超出本工具边界，生产发布目录必须只读/不可变。stop 只对 deployment/service、boot ID、starttime、进程组和可选回滚 run ID 匹配的 supervisor/遗留 child 发送 SIGTERM，宽限期后不自动模糊强杀。控制面不依赖业务 workdir，但尚未在真实 SSH/Docker 环境验证目录卸载场景。未做真实 SSH 中断、容器重启、PID 复用、不可中断 NPU worker 或多小时网络抖动的端到端故障注入；两个 Linux supervisor/worker 集成用例已编写但本机未运行。
 
 E2E parser 的本地合成样本覆盖本次九组正式测试与九组 Prefix 探针口径，但没有把历史现场日志、IP、账号、路径、密码或密钥加入仓库。`/metrics` 404 仅在对应指标探针明确可选时可记为 UNVERIFIED；实际请求、case 数、失败请求、致命日志和后置健康仍必须独立通过。
+
+## 2026-09-18：五个核心能力重构与理论并行规划
+
+README 与技能入口重构为五个主能力：理论并行规划、通信预检、现场排障、服务生命周期、性能验证与寻优。`SKILL.md` 只保留任务路由和共用安全边界；指标/并行推导归入 `vllm-pd-operations.md`，`analyze → verify → quick → exhaustive` 执行语义归入 `service-lifecycle.md`，没有复制一份新的重叠 reference。官方/历史脚本继续只是有条件先验，目标机器的启动、正确性和代表负载才是推广依据。
+
+新增纯标准库 `parallelism_advisor.py` 和脱敏 sidecar。工具严格校验 schema、环境指纹、P/D/集群卡预算和显式 TP/PP 范围，枚举满足 `DP×TP×PP=角色卡预算` 的候选，并按 output/request throughput、TTFT、TPOT、goodput 或 balanced 的可解释字典序先验排序。它没有 SSH、socket、HTTP 或子进程执行能力；版本占位符未替换时只返回 `DRAFT_RECOMMENDATION`，正常输入也只返回 `THEORY_ONLY`，不生成服务命令或修改工作流配置。
+
+新增 19 项 advisor 回归；仓库共发现 234 项 unittest，Windows 上 231 项通过、3 项 Linux-only 用例按预期跳过。覆盖预算守恒、目标策略差异、极端数值溢出、非标准 JSON、重复字段、布尔冒充整数、并发写报告只允许一个成功、显式覆盖与输入文件保护、UTF-8 JSON、禁止远端/进程能力，以及“TP size 不超过单机容量不等于联合 placement 已验证”。全量 `py_compile` 检查 14 个 Python 文件，解析 11 个 JSON，校验 121 个相对 Markdown 路径，站点敏感信息扫描和 `git diff --check` 均通过；skill-creator `quick_validate.py` 返回 `Skill is valid!`。
+
+独立正向试用从 `SKILL.md` 正确路由到离线分析器，公开 64 卡示例的理论排序首项为 P DP2/TP8/PP2、D DP16/TP2/PP1；由于示例仍含 `fill-current-*`，最终状态按设计降级为草稿。试用未写文件、未联网、未连接服务器。审查发现的无名排序数组、占位符误推荐、物理装箱误读与数值溢出均在本轮修正。
+
+EPLB 边界依据当前 [vLLM 配置文档](https://docs.vllm.ai/en/latest/api/vllm/config/parallel/) 与 [vLLM-Ascend 功能指引](https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/expert_parallelism_load_balancer.html) 补充。当前生命周期 schema 不把 EPLB 作为 typed feature 自动验证；参数必须显式进入版本绑定的 argv/env，并以日志、专家热度/迁移、显存、SLO 和吞吐证据验收。没有证据时不声明 EPLB 与 fused MC2 普遍冲突。
+
+仍未实现：根据实测反馈自动生成下一候选、P/D 卡预算自动重分配、主机/设备联合装箱、自适应停止、置信区间或 checkpoint/resume。advisor 的 quick/exhaustive 是理论候选数量和验证计划层级；`service_workflow.py tune` 仍是每阶段至多 32 个显式 trial 的安全执行器。本轮没有连接 SSH/Docker/NPU，也没有运行真实模型、精度或性能测试。

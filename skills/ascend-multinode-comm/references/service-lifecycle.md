@@ -2,21 +2,25 @@
 
 本文用于用户明确要求根据配置拉起 vLLM-Ascend 服务、运行有限参数寻优或执行自动验收时。通信预检仍由 `preflight.py` 负责；长时服务生命周期由 `scripts/service_workflow.py` 单独管理，不能把两类报告混成同一种 PASS。
 
-现场问题、并行布局、prefix cache、池化、fused MC2、multistream、P OOM、D 启动与 E2E 判定先读 [PD 运维规则](vllm-pd-operations.md)。
+现场问题、并行布局、prefix cache、池化、fused MC2、multistream、P OOM、D 启动与 E2E 判定先读 [PD 运维规则](vllm-pd-operations.md)。只需要先生成并行候选时，从其中的[指标驱动并行推导](vllm-pd-operations.md#按目标指标先推导并行策略)开始，不必先进入远端生命周期。
+
+本页的 `scripts/`、`examples/` 和 `reports/` 相对路径默认以 `skills/ascend-multinode-comm/` 为当前目录；从仓库根目录运行时先进入该目录，或给脚本和样例路径加完整前缀。
 
 ## 能力边界
 
 工作流支持：
 
+- 用独立纯离线分析器枚举显式合法的 P/D DP×TP×PP，并输出理论首选、备选、假设与最小验证计划；
 - 严格校验 JSON 配置、P/D 的 DP×TP×PP 与实例/设备映射；
 - 按依赖 DAG 分批启动已有容器内的前台命令；同一批 supervisor 先发布所有权、全部收到激活令牌后才启动服务，再并发等待健康，适配跨节点 rendezvous；
 - 为每个服务维护独立 supervisor、日志和 PID 证据；
 - 根据返回码、完整 case 计数、失败请求数、指标和测试后健康判定测试；
-- 串行运行至多 32 个显式候选，先验证 baseline，默认只输出最优推荐并停止全部 trial；
+- 串行运行至多 32 个显式候选，先验证 baseline，默认只输出本批合格候选中的 best/recommendation 并停止全部 trial；
 - 可绑定新鲜的通信预检报告，并在控制端预检后由远端 worker/supervisor 在 `Popen` 前再次复核入口文件 SHA256。
 
 工作流不负责：
 
+- 把理论排序冒充真实性能预测，或把未经目标机器验证的候选直接写进可执行配置；
 - 创建、停止或删除容器，拉取/构建镜像；
 - 停止本工具没有所有权证据的进程，或按端口、名称、`pkill`、`killall` 清服务；
 - 修改防火墙、路由、sshd、设备状态或重置 NPU；
@@ -141,6 +145,32 @@ python "$WORKFLOW" stop --config "$CONFIG" \
 PID 状态用临时文件加 `os.replace` 原子发布，独立生命周期锁防止重复 supervisor；内容包含 deployment、service、service/profile 规格 SHA256、run ID、宿主 boot ID、supervisor/child PID、`/proc` starttime、进程组和启动时 cmdline SHA256。supervisor 自身必须继续匹配 PID/starttime/cmdline；前台 child 允许正常 `exec` 改变 cmdline，但必须保持 PID、starttime 且仍是记录的进程组 leader。回滚还必须匹配本轮 run ID，不能停止另一控制端刚启动的同名服务。停止成功要求记录的进程组中已无非僵尸成员；leader 退出但组内仍有无法重新核验归属的成员时保留状态并失败关闭。supervisor 异常退出时保留可核验的 child 证据并尝试安全回收；宽限期后仍存活时报告失败，不自动把服务侧进程强杀。健康但缺少所有权文件的进程会被保留并报错。
 
 控制端在任何远端动作前先用排他锁和占位文件预留报告路径，完成后原子替换；报告及其 lock/temp/error/probe 派生路径不得与配置、preflight 报告或 SSH identity 文件相同（含符号链接/已有硬链接）。路径已存在时默认拒绝，确实要替换时显式加 `--force`。若覆盖模式下动作失败，旧报告保留并另写带 token 的 `.error.*.json`。这不改变远端测试日志的独立锁与备份策略。远端 JSON payload 采用内联 argv，执行确认会按 Windows CreateProcess 的 32K 边界保留余量并预先拒绝过长配置；本地正则 operations 改走临时文件，避免合法断言挤爆命令行。
+
+## 优化层级：analyze → verify → quick → exhaustive
+
+优化不是直接从长循环开始。先把官方配置或现有成功脚本当作兼容 baseline，再按本次模型、版本、硬件、负载和主指标选择需要到达的层级：
+
+1. **analyze**：纯离线推导。复制 [`parallelism-advisor.json`](../examples/parallelism-advisor.json)，只填写脱敏环境指纹、总卡数、P/D 预算、已核实的 TP/PP allow-list、最小单副本卡数和固定负载。运行：
+
+   ```bash
+   python scripts/parallelism_advisor.py \
+     --config examples/parallelism-advisor.local.json \
+     --out reports/parallelism-advice.json
+   ```
+
+   置信度固定为 `THEORY_ONLY`。环境指纹完整时状态为 `RECOMMENDED_FOR_VALIDATION`；公开样例的 `fill-current-*` 尚未替换时降级为 `DRAFT_RECOMMENDATION` 并列出缺口。输入中的 P/D 预算之和不能超过集群总卡；例如 P、D 各 32 卡表示至少 64 张可同时使用的卡。allow-list 和最小单副本卡数必须来自模型容量、当前版本支持或同口径历史证据，不能为了得到预想答案倒填。分析器没有 SSH、容器、网络或子进程执行能力，也不生成 `services[]`。它固定用户声明的 P/D 卡预算；token/QPS 只形成负载代理，在没有当前模型实测服务时间时不伪造跨角色容量评分或自动重分配卡数。
+
+2. **verify**：把首选候选复制到一份新的、无模板的 service-workflow 本地配置和用户同风格脚本；重新 `validate/plan`，只做一次最小启动、正确性、代表负载、日志和停止闭环。理论候选达到用户门槛即可结束，不强制进入 tune。
+3. **quick**：锁定模型、镜像、软件版本、P/D 节点预算和测试负载，通常只比较 baseline 附近 8～16 个显式候选（参数值或合法特性组合）；探索阶段使用代表 case，前两名再做完整 E2E 和重复测试。推荐数量可由用户预算收紧，但不能省略硬门槛。
+4. **exhaustive**：按“拓扑粗筛 → 特性组合 → 数值细搜 → 完整 E2E → 重复/长稳”分阶段推进。每阶段仍受现有 32 个显式 trial 硬上限约束，阶段间根据前一报告生成新配置、重新 plan、人工审阅并授权；不能用一个无限循环规避边界。最终只称为声明模型、版本、硬件、负载和搜索空间内的高置信候选。
+
+一个 trial 是“一组配置完成停止旧实例、拉起、预热、固定测试、后置健康、停止和增量日志扫描”，不是单条请求。两种模式都采用“一个主指标 + 硬门槛”：失败请求为零、精度与稳定性通过、无 OOM/device fault/EngineDead/KV 致命错误、用户 TTFT/TPOT SLO 和显存余量满足。输入/输出长度、并发、Prefix 口径属于固定评测条件，除非用户明确把业务负载本身设为研究变量，不能通过降低负载美化指标。
+
+历史脚本、规范化结果和失败记录用于 warm start 与裁剪；只给脚本而没有环境、负载和指标，不能作为“更优”证据。跨版本、镜像或模型比较必须另建实验和 plan，不能混入同一候选集合。
+
+当前 `service_workflow.py tune` 是每阶段的安全有限候选执行器，不是自适应搜索器；`quick/exhaustive` 是计划和证据层级，不是尚未实现的 CLI preset。自动生成下一候选、统计置信区间和 checkpoint/resume 仍需后续实现，不能在文档中冒充已有能力。
+
+注意数量口径不同：`parallelism_advisor.py` 的 quick/exhaustive 最多返回 4/16 个**理论拓扑推荐**；这里 quick 的 8～16 和 exhaustive 每阶段最多 32 指需要实际拉起、测试和停止的 **lifecycle trial**。理论推荐数不是上机轮数，advisor 的 mode 也不会自动启动 `tune`。
 
 ## 有界寻优
 
