@@ -8,7 +8,7 @@
 
 | 能力 | 输入 | 主要产物 |
 |---|---|---|
-| 理论并行规划 | 模型/版本、卡数、P/D 预算、合法 TP/PP 范围、固定负载、目标指标 | P/D DP×TP×PP 首选与备选、理由、假设、最小验证计划 |
+| 理论并行规划 | 模型/版本、量化与 cache、卡数、P/D 预算、合法 TP/PP 范围、固定负载、目标指标及同口径历史显存证据 | P/D DP×TP×PP 首选与备选、理由、假设、最小验证计划 |
 | 通信预检 | 节点、容器、工作目录、部署脚本与允许的空闲资源 | Host/TCPStore/Gloo/HCCL/MC2/PD-KV 的已测、失败和未测范围 |
 | 现场排障 | 现有进程、日志、网络/设备状态和失败时间线 | 最早失败阶段、节点/rank/链路证据与最小修复建议 |
 | 服务生命周期 | 严格本地配置、远端前台脚本、artifact 哈希和明确授权 | ownership-scoped launch/status/test/stop 报告与可回滚 run ID |
@@ -31,7 +31,7 @@ analyze（纯离线理论候选）
       → exhaustive（拓扑→特性→数值→全量E2E→重复/长稳）
 ```
 
-理论候选达到目标时可以在 verify 后结束。`quick` 和 `exhaustive` 不是简单放大 `max_trials`：后者按阶段推进，每阶段仍最多 32 个显式候选，阶段间重新生成、审阅和批准 plan。当前 `service_workflow.py` 是安全的有限候选执行器，不冒充自适应搜索器。
+理论候选达到目标时可以在 verify 后结束。若已有同模型/检查点、量化/cache、软件栈、硬件、拓扑与负载的真实服务日志，先用它校准容量硬下界、保守静态估算和候选边界；日志只能证明该候选成功到哪一阶段或为何失败，不能单独证明所有拓扑可运行。`quick` 和 `exhaustive` 不是简单放大 `max_trials`：后者按阶段推进，每阶段仍最多 32 个显式候选，阶段间重新生成、审阅和批准 plan。当前 `service_workflow.py` 是安全的有限候选执行器，不冒充自适应搜索器。
 
 性能比较采用一个主指标和硬门槛：失败请求为零、精度与稳定性通过、无 OOM/device fault/EngineDead/KV 致命错误，并满足用户 TTFT/TPOT、显存余量等 SLO。输入/输出长度、并发和 Prefix 口径在候选之间固定，不能通过降低测试负载制造提升。
 
@@ -65,7 +65,7 @@ python skills/ascend-multinode-comm/scripts/parallelism_advisor.py \
 
 以下命令中的 `python` 表示 Python 3.10+；Windows 未配置该命令时可使用 `py -3` 或解释器绝对路径。
 
-例如 P、D 各写 32 张卡时，`hardware.cluster_devices` 至少为 64。`tp_sizes/pp_sizes`、`minimum_replica_devices` 和兼容约束必须来自当前模型/版本、容量计算或同口径历史证据，不能为了得到预想拓扑倒填。输出只用于生成或修改用户同风格脚本，执行前仍需重新 plan。
+例如 P、D 各写 32 张卡时，`hardware.cluster_devices` 至少为 64。`tp_sizes/pp_sizes`、`minimum_replica_devices` 和兼容约束必须来自当前模型/版本、容量硬下界与保守静态估算，或同口径历史日志，不能为了得到预想拓扑倒填；分析器本身不会读取权重或日志并自动算出这些值。输出只用于生成或修改用户同风格脚本，执行前仍需重新 plan。
 公开样例保留 `fill-current-*` 占位符，因此直接运行只会得到 `DRAFT_RECOMMENDATION`；填完环境指纹并重新运行后，状态才可能是 `RECOMMENDED_FOR_VALIDATION`。
 
 ### 2. 通信预检

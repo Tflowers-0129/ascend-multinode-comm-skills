@@ -46,7 +46,7 @@ role_world_size = DP × TP × PP
 
 - TP 将单层张量切到多卡，要求各 TP rank 的模型、网络和集合通信一致。
 - PP 将模型层分段；`PP > 1` 时，一个 DP 副本会跨多个 pipeline stage，不能把每个 stage 当成独立 API 服务。
-- DP 复制完整的 TP×PP 模型组；DP 地址、起始 rank、本地 DP 数和 RPC 端口必须形成唯一且完整的 rank 空间。
+- 普通 replicated-DP 会复制完整的 TP×PP 模型组；启用跨 DP 的专家/权重分片时不适用，必须按当前 EP 实现和实际 rank placement 核算。DP 地址、起始 rank、本地 DP 数和 RPC 端口仍必须形成唯一且完整的 rank 空间。
 - EP 可能改变专家通信域，但不应被误算成额外模型副本；以当前版本实现为准。
 
 若计划设备数与现场可见卡数不相等，先停止启动。典型错误包括 DP start rank 重叠、某节点 local size 不一致、PP stage 缺失、不同节点看到的设备顺序不同，以及同一端口被两组 rendezvous 复用。
@@ -193,6 +193,63 @@ P 启动或首批请求的 OOM 常见于模型权重、KV cache、激活、通�
 - 所有 P rank 的显存余量都满足要求，而非只看 rank 0。
 
 不要只依赖 `npu-smi` 某一时刻的空闲值；关联各 rank 的分配日志、失败申请大小和峰值时间。
+
+### 候选级显存判定：静态估算与真实日志校准
+
+`minimum_replica_devices` 不能只按总权重除以集群总显存填写。先计算权重、必要 KV 等不可省略项的容量硬下界，再为每个候选做含瞬时项和余量的保守静态估算，最后用相同口径的真实启动/请求日志校准。判定对象是所有 rank、所有 PP stage 中的最坏一张卡，而不是集群显存平均值。下式是容量预算估算，不是数学下界或精确峰值预测：
+
+```text
+rank_capacity_budget ≈
+  resident_weight
++ resident_KV
++ resident_runtime_and_comm
++ max(load_transient, compile_or_graph, warmup_or_MTP_dummy, request_workspace)
++ fragmentation_and_safety_margin
+```
+
+- 在普通 replicated-DP、没有跨 DP 专家/权重分片时，DP 复制完整的 TP×PP 副本，不帮助单副本分摊权重。因而 `DP16×TP1` 即使集群总显存看似足够，每个 TP1 副本仍可能在单 rank 上装不下；若启用 EP 或其他跨 DP 分片，必须改按实际专家归属和 rank placement 计算，不能套用这条简化规则。
+- `checkpoint_size ÷ TP ÷ PP` 只能作为权重下界。PP stage 不均衡、embedding/head、MoE 专家归属、量化加载或反量化临时副本、通信 buffer 和运行时常驻都会造成偏差；相同的 `TP×PP` 乘积也不保证相同峰值。
+- KV 预算必须同时绑定 cache dtype、block size、最大长度、`max-num-seqs`、角色和实际并发。P、D 即使使用同一模型，KV 与瞬时工作区也可能不同。
+- `gpu-memory-utilization` 是框架预算控制，不是“真实峰值必定等于该比例”。采样式 `npu-smi` 可能漏掉短时峰值，只能作为旁证。
+
+为每次候选建立脱敏的“显存证据卡”，至少记录：
+
+| 类别 | 必要字段 |
+|---|---|
+| 候选身份 | trial/run ID、时间窗口、P/D、rank、PP stage、实际 placement |
+| 硬件与软件 | 卡型与单卡 HBM、镜像 digest、vLLM/vllm-ascend、CANN、HDK/驱动 |
+| 模型与 cache | 模型/检查点哈希、量化与权重 dtype/load format、KV dtype、block size、最大长度、`max-num-seqs` |
+| 拓扑与峰值参数 | DP×TP×PP×EP、`max-num-batched-tokens`、MTP/推测解码、graph/eager、prefix、EPLB、MC2/multistream |
+| 现场与结果 | 同卡残留进程、失败阶段/rank、申请/free/allocated/reserved 字节、退出码、日志偏移，以及启动、首请求、目标 E2E、长稳分别是否通过 |
+
+证据卡是人工或 agent 归一化的 sidecar/报告，不是当前 `parallelism_advisor.py` 或 `service_workflow.py` 已支持的新配置字段。`minimum_replica_devices` 只能表达角色级粗粒度下界，当前 advisor schema 没有合法 `(TP, PP)` pair 白名单；若日志只否定某个特定组合，必须在外部预筛或人工审阅，不能把整个乘积范围错误排除，也不能声称工具已自动消费证据。原始 IP、账号、私有路径和现场日志不进入仓库。
+
+按“失败阶段 + 原始证据”分类，避免所有异常都写成 OOM：
+
+| 分类 | 需要的证据 | 可下的结论 |
+|---|---|---|
+| 权重/常驻容量不足 | 权重加载阶段有明确 allocator OOM，或排除文件/版本/算子错误后核算出常驻项超过预算 | 当前候选的单 rank 常驻布局不成立 |
+| KV 容量不足 | KV 日志明确报告预算/block 不足，或目标长度/并发所需 block 超过已分配容量 | 当前 cache 口径不成立；普通 profiling 异常本身不足以归类，也不等于 warmup 工作区不足 |
+| warmup/MTP dummy/请求工作区 OOM | 权重与 KV 已建立，随后在 dummy、graph capture、首批或目标请求失败 | 基础模型可能装得下，但该候选的瞬时峰值不成立 |
+| allocator OOM 未分类 | 只有 failed-to-allocate，没有可靠阶段或 allocator 上下文 | 只能判当前候选失败，不能猜权重、KV 或碎片根因 |
+| 碎片/连续分配风险 | allocator segment/reserve/连续块证据与失败时间线一致 | 可列为碎片风险；“free 大于申请量”单独不足以证明碎片 |
+| 宿主/容器 OOM | exit 137/SIGKILL，并有 `memory.events`、cgroup 或 kernel OOM 证据 | CPU/容器内存问题，不能归入 NPU 显存 |
+| NPU device fault | 设备/CANN 日志出现 page fault、非法 GM 地址、越界或 vector core 异常 | 独立致命类；不能靠降低利用率或反复重启当作普通 OOM |
+
+后续的 EngineDead、HCCL watchdog、TBE 子进程退出、SIGTERM/SIGKILL 可能只是 worker 首因后的清理结果。判断“是不是被杀”时先找最早的设备/allocator/宿主证据，不能把最后一次 SIGKILL 当根因。
+
+#### 脱敏现场样本：32K 失败与 16K 通过
+
+一次 64 GiB 级 A2、GLM-5.3 W8A8C8 的 P 侧候选使用 `DP2×TP8×PP2`、vLLM 0.23.0、Ascend 量化、BF16 KV、MTP、prefix cache、135K 最大长度和 `gpu-memory-utilization=0.92`。同一现场的相邻候选证据显示：
+
+- `max-num-batched-tokens=32768` 时，PP1 的多个 rank 在 `execute_dummy_batch → all_gather` 阶段尝试申请约 4.26 GiB；日志同时记录约 4.75 GiB free、49.45 GiB allocated、49.66 GiB reserved，候选因 NPU allocator OOM 退出。
+- allocated 与 reserved 很接近，因此这段日志不能单独证明“碎片化就是根因”；它能确认的是 32K/MTP dummy 的瞬时工作区候选失败，而非权重一定装不下。
+- 保持 0.92、把单批 token 降到 16384 的后续候选中，PP0 日志约为 30.76 GiB 权重、3.9 GiB 峰值激活、6.06～6.07 GiB non-torch、15.35 GiB KV；PP1 约为 30.94 GiB 权重、4.2 GiB 峰值激活、6.08 GiB non-torch、14.86 GiB KV，并完成启动。
+- 随后的固定 E2E 覆盖 9 组正式 case 和 9 组 Prefix 探针，18 条 `Failed Requests` 汇总均为 0。这个结果把“启动通过”提高到“目标矩阵通过”，但仍只对该模型、版本、拓扑、特性和负载指纹成立。
+
+这类一失败一成功的相邻证据可把下一轮搜索区间收敛到已通过的 16K 与已失败的 32K 之间，并用于裁剪候选；它不等于精确确定阈值，也不能外推为所有 `TP8×PP2`、所有 A2 或其他版本都具有相同边界。若其他配置项未严格锁定，或检查点哈希、镜像 digest、完整软件栈没有记录齐，该样本只能降级为弱先验。
+
+另一现场故障先出现非法 GM 地址/vector core 异常，随后才出现 HCCL watchdog 和进程强制退出。该链路应归为 NPU device fault，不能与上述 allocator OOM 合并统计。成功/失败证据的强度依次为：静态下界 < 启动通过 < 首请求通过 < 目标 E2E 通过 < 重复与长稳通过。
 
 ## 8. Proxy 与“直接请求 P 出现乱码”
 

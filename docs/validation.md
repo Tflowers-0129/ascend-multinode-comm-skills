@@ -172,3 +172,15 @@ README 与技能入口重构为五个主能力：理论并行规划、通信预�
 EPLB 边界依据当前 [vLLM 配置文档](https://docs.vllm.ai/en/latest/api/vllm/config/parallel/) 与 [vLLM-Ascend 功能指引](https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/expert_parallelism_load_balancer.html) 补充。当前生命周期 schema 不把 EPLB 作为 typed feature 自动验证；参数必须显式进入版本绑定的 argv/env，并以日志、专家热度/迁移、显存、SLO 和吞吐证据验收。没有证据时不声明 EPLB 与 fused MC2 普遍冲突。
 
 仍未实现：根据实测反馈自动生成下一候选、P/D 卡预算自动重分配、主机/设备联合装箱、自适应停止、置信区间或 checkpoint/resume。advisor 的 quick/exhaustive 是理论候选数量和验证计划层级；`service_workflow.py tune` 仍是每阶段至多 32 个显式 trial 的安全执行器。本轮没有连接 SSH/Docker/NPU，也没有运行真实模型、精度或性能测试。
+
+## 2026-09-18：历史真实服务日志驱动的显存校准
+
+本轮在用户指定范围内只读复核了此前真实运行的八节点 A2 PD 服务日志和 E2E 结果，没有启动、停止、重启或修改服务器服务。公开仓库不保存现场地址、账号、私有目录、密钥、原始脚本或原始日志，只记录以下脱敏事实与可复用判定方法。
+
+失败候选为 64 GiB 级 A2 上的 GLM-5.3 W8A8C8 P 侧 `DP2×TP8×PP2`，日志记录 vLLM 0.23.0、Ascend 量化、BF16 KV、MTP、135K 最大长度和 `gpu-memory-utilization=0.92`。`max-num-batched-tokens=32768` 时，多个 PP1 rank 在 `execute_dummy_batch → all_gather` 阶段申请约 4.26 GiB 失败；allocator 同时记录约 4.75 GiB free、49.45 GiB allocated 和 49.66 GiB reserved。该证据确认的是当前候选的瞬时工作区 OOM；free 大于申请量、allocated 与 reserved 接近，不能单独证明碎片化，也不能推导权重本身装不下。
+
+后续 16K 候选保持显存利用率 0.92，启动日志按 stage 记录了权重、峰值激活、non-torch 和 KV：PP0 约为 30.76/3.9/6.06～6.07/15.35 GiB，PP1 约为 30.94/4.2/6.08/14.86 GiB。最终固定 E2E 结果包含 9 组正式 case、9 组 Prefix 探针和 18 条 `Failed Requests`，失败数均为 0。它建立了一个候选级成功下界，但缺少完整检查点哈希、镜像 digest、vllm-ascend/CANN/HDK 指纹时不能升级为跨环境通用配方。
+
+另一个历史故障先出现非法 GM 地址/vector core 异常，随后才出现 HCCL watchdog、worker death 和强制退出。技能因此明确把 NPU device fault 与 allocator OOM、KV/权重容量、宿主/容器 OOM 分开；最后一次 SIGKILL 可能只是清理结果，不能替代最早首因。
+
+本轮只更新 README、`SKILL.md`、验证记录和两个既有 reference，没有新增重复章节或声称已实现自动显存估算器。`minimum_replica_devices` 仍由容量硬下界、保守静态估算和人工/agent 归一化的同口径日志证据支撑。Windows 全量发现 234 项 unittest，231 项通过、3 项 Linux-only 按预期跳过；skill-creator `quick_validate.py` 返回 `Skill is valid!`，123 个相对 Markdown 文件/锚点链接、`git diff --check` 与修改文件的现场身份/路径扫描通过。

@@ -21,6 +21,7 @@
 工作流不负责：
 
 - 把理论排序冒充真实性能预测，或把未经目标机器验证的候选直接写进可执行配置；
+- 从权重、量化/cache 或日志自动重建精确显存峰值；当前工具不会自动计算 `minimum_replica_devices`，也不会自动证明候选能装下；
 - 创建、停止或删除容器，拉取/构建镜像；
 - 停止本工具没有所有权证据的进程，或按端口、名称、`pkill`、`killall` 清服务；
 - 修改防火墙、路由、sshd、设备状态或重置 NPU；
@@ -160,11 +161,13 @@ PID 状态用临时文件加 `os.replace` 原子发布，独立生命周期锁�
 
    置信度固定为 `THEORY_ONLY`。环境指纹完整时状态为 `RECOMMENDED_FOR_VALIDATION`；公开样例的 `fill-current-*` 尚未替换时降级为 `DRAFT_RECOMMENDATION` 并列出缺口。输入中的 P/D 预算之和不能超过集群总卡；例如 P、D 各 32 卡表示至少 64 张可同时使用的卡。allow-list 和最小单副本卡数必须来自模型容量、当前版本支持或同口径历史证据，不能为了得到预想答案倒填。分析器没有 SSH、容器、网络或子进程执行能力，也不生成 `services[]`。它固定用户声明的 P/D 卡预算；token/QPS 只形成负载代理，在没有当前模型实测服务时间时不伪造跨角色容量评分或自动重分配卡数。
 
+   若存在真实服务日志，先按 [候选级显存判定](vllm-pd-operations.md#候选级显存判定静态估算与真实日志校准)制作脱敏“显存证据卡”：绑定模型/检查点、量化与 cache、软件栈、硬件、DP×TP×PP×EP、placement、峰值参数、失败阶段和 allocator 数字。它作为人工审阅的 sidecar/报告支撑 `minimum_replica_devices`、allow-list 和候选边界；不要把这些字段直接塞进 `service-workflow.json`，当前 schema 不认识它们。不同指纹的历史日志只能作为弱先验。
+
 2. **verify**：把首选候选复制到一份新的、无模板的 service-workflow 本地配置和用户同风格脚本；重新 `validate/plan`，只做一次最小启动、正确性、代表负载、日志和停止闭环。理论候选达到用户门槛即可结束，不强制进入 tune。
 3. **quick**：锁定模型、镜像、软件版本、P/D 节点预算和测试负载，通常只比较 baseline 附近 8～16 个显式候选（参数值或合法特性组合）；探索阶段使用代表 case，前两名再做完整 E2E 和重复测试。推荐数量可由用户预算收紧，但不能省略硬门槛。
 4. **exhaustive**：按“拓扑粗筛 → 特性组合 → 数值细搜 → 完整 E2E → 重复/长稳”分阶段推进。每阶段仍受现有 32 个显式 trial 硬上限约束，阶段间根据前一报告生成新配置、重新 plan、人工审阅并授权；不能用一个无限循环规避边界。最终只称为声明模型、版本、硬件、负载和搜索空间内的高置信候选。
 
-一个 trial 是“一组配置完成停止旧实例、拉起、预热、固定测试、后置健康、停止和增量日志扫描”，不是单条请求。两种模式都采用“一个主指标 + 硬门槛”：失败请求为零、精度与稳定性通过、无 OOM/device fault/EngineDead/KV 致命错误、用户 TTFT/TPOT SLO 和显存余量满足。输入/输出长度、并发、Prefix 口径属于固定评测条件，除非用户明确把业务负载本身设为研究变量，不能通过降低负载美化指标。
+一个 trial 是“一组配置完成停止旧实例、拉起、预热、固定测试、后置健康、停止和增量日志扫描”，不是单条请求。显存证据应覆盖权重加载、KV 分配、warmup/MTP dummy、ready、首请求、目标 case 和测试后健康；每个阶段保留本轮日志偏移和最坏 rank。两种模式都采用“一个主指标 + 硬门槛”：失败请求为零、精度与稳定性通过、无 OOM/device fault/EngineDead/KV 致命错误、用户 TTFT/TPOT SLO 和显存余量满足。输入/输出长度、并发、Prefix 口径属于固定评测条件，除非用户明确把业务负载本身设为研究变量，不能通过降低负载美化指标。
 
 历史脚本、规范化结果和失败记录用于 warm start 与裁剪；只给脚本而没有环境、负载和指标，不能作为“更优”证据。跨版本、镜像或模型比较必须另建实验和 plan，不能混入同一候选集合。
 
@@ -182,7 +185,7 @@ python "$WORKFLOW" tune --config "$CONFIG" \
   --out reports/tuning.json
 ```
 
-每个 trial 严格串行：确认旧的 tool-owned 服务停止 → 拉起并确认本轮拥有全部服务 → 等待健康 → 仅在 run ID 精确匹配时执行相同测试 → 后置健康 → 仅按本轮 run ID 停止 → 再扫描停止阶段写入的服务日志。正常失败、异常或 Ctrl-C 都进入本轮精确回收；控制端中断还会回收本地 SSH transport。无法确认清理时不开始下一候选。baseline 未通过立即终止；命中 test/tuning/service 的 `fatal_patterns`（如 device page fault、EngineDead、KV/ReadError），或日志/测试输出、正则评估、测试进程组清理不完整，立即终止且不自动重试。普通候选错误（如已分类为非致命的 OOM）可记录后继续，前提是本轮服务已完整停止且停止后日志也无致命证据。
+每个 trial 严格串行：确认旧的 tool-owned 服务停止 → 拉起并确认本轮拥有全部服务 → 等待健康 → 仅在 run ID 精确匹配时执行相同测试 → 后置健康 → 仅按本轮 run ID 停止 → 再扫描停止阶段写入的服务日志。正常失败、异常或 Ctrl-C 都进入本轮精确回收；控制端中断还会回收本地 SSH transport。无法确认清理时不开始下一候选。baseline 未通过立即终止；命中 test/tuning/service 的 `fatal_patterns`（如 device page fault、EngineDead、KV/ReadError），或日志/测试输出、正则评估、测试进程组清理不完整，立即终止且不自动重试。普通 allocator OOM 只有在失败候选已记录、本轮服务精确清理完成且没有命中 fatal pattern 时才可能继续；当前工具不会按时间线上下文把 OOM 后的 EngineDead 自动降级，配置为 fatal 的 EngineDead 仍会保守中止。若人工/agent 从外部状态或系统日志看到 exit 137/SIGKILL，应先中止并检查 cgroup/kernel 的宿主或容器 OOM 证据；supervisor 可能改写子进程返回码，当前工具不保证保留或识别原始 137，也不会自动读取系统证据，因此这不是自动门禁。device page fault 保持致命停止。
 
 只有所有测试通过且目标 metric 存在的 trial 才参与最优选择。`tune` 默认不把最佳候选重新上线；先审阅报告，把 best 写成一份无模板的最终本地配置，重新 plan、approve、launch 和完整测试。
 

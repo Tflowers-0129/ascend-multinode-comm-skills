@@ -13,7 +13,7 @@ description: 面向 Ascend A2/A3/A5 与 vLLM-Ascend 的并行策略分析、配�
 
 | 能力 | 何时使用 | 入口与产物 |
 |---|---|---|
-| 理论规划 | 用户关心 TTFT、TPOT、吞吐、并发或长上下文，希望先得到脚本方向 | 读 [PD 指标驱动推导](references/vllm-pd-operations.md#按目标指标先推导并行策略)，用 `parallelism_advisor.py` 对已核实的合法范围生成首选/备选、理由、假设和最小验证计划；不连接服务器，不称为实测结果 |
+| 理论规划 | 用户关心 TTFT、TPOT、吞吐、并发或长上下文，希望先得到脚本方向 | 读 [PD 指标驱动推导](references/vllm-pd-operations.md#按目标指标先推导并行策略)；若有同口径历史服务，再读[候选级显存判定](references/vllm-pd-operations.md#候选级显存判定静态估算与真实日志校准)。用 `parallelism_advisor.py` 对已核实的合法范围生成首选/备选、理由、假设和最小验证计划；不连接服务器，不称为实测结果 |
 | 通信预检 | 服务未启动，需验证计划配置、容器网络和通信域 | 按“启动前通信预检”，逐层验证 Host、TCPStore/Gloo、HCCL、MC2、PD/KV；未执行的层保持 `UNVERIFIED` |
 | 现场排障 | 服务已失败、卡住或部分 rank 异常 | 按“现场建链排障”保留现场，从最早失败阶段和对端证据定位；修改、重启和占卡验证需相应授权 |
 | 服务生命周期 | 用户明确要求启动、状态检查、停止或运行测试 | 读 [配置驱动工作流](references/service-lifecycle.md)，用严格配置、plan SHA、artifact 哈希和 run ID 只管理本工具拥有的进程 |
@@ -57,7 +57,7 @@ description: 面向 Ascend A2/A3/A5 与 vLLM-Ascend 的并行策略分析、配�
 
 仅当用户明确要求启动、停止、测试或调优时进入本流程；“检查/排障”本身不授权修改服务。完整配置、命令和状态边界见 [配置驱动工作流](references/service-lifecycle.md)，本次 A2/GLM 类问题形成的条件化经验见 [PD 运维规则](references/vllm-pd-operations.md)。
 
-0. 若用户尚未固定并行策略，先按模型容量、单机快速互联域、P/D 设备预算、版本/connector 合法范围、固定负载和主指标做纯离线分析。输出排序靠前候选，并保留用户已有 baseline 或人工选择的资源余量型备选，列出假设与置信度；用 `parallelism_advisor.py` 时，allow-list 和最小单副本卡数必须有版本、容量或历史证据。理论候选只需一次最小 verify 就可能满足需求，不强制长时间 tune。
+0. 若用户尚未固定并行策略，先按模型容量、单机快速互联域、P/D 设备预算、版本/connector 合法范围、固定负载和主指标做纯离线分析。输出排序靠前候选，并保留用户已有 baseline 或人工选择的资源余量型备选，列出假设与置信度；用 `parallelism_advisor.py` 时，allow-list 和最小单副本卡数必须有版本、容量或历史证据。若存在同口径真实服务日志，先按“候选级显存判定”规范化成功/失败证据，用它约束这些输入和待验证边界；模型/检查点、量化与 cache、软件栈、拓扑、特性或负载指纹不一致时只能作为弱先验。理论候选只需一次最小 verify 就可能满足需求，不强制长时间 tune。
 1. 从现场已有脚本和只读状态建立 `service-workflow` 本地配置。明确 P/D 的 DP、TP、PP、每个 DP instance 的节点/设备、完整版本指纹、engine 参数、prefix cache/池化/fused MC2/multistream、Proxy、健康与测试判据。A2 deployment profile 不等于现有 preflight 平台 gate 已认证；按工具实际支持范围保留 UNVERIFIED。
 2. 原脚本不直接改写；需要调整时先复制，保持用户已有纯 Bash 格式，只暴露必要 argv/env 参数。入口以前台进程运行并绑定远端 SHA256；后台化且无法返回结构化所有权证据的脚本只能 plan/manual，不能自动循环重启。
 3. 先 `validate`、再 `plan`，核对计划中的精确节点、容器、卡、依赖 wave、artifacts、测试和候选。若配置要求通信门禁，绑定同一通信域的新鲜 preflight 报告。计划同时绑定配置、证据和工作流实现；配置、脚本、报告或实现变化后 plan SHA 作废。
@@ -96,7 +96,7 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 
 `scripts/hccl_bench.py`：从重复的 `--host` 参数生成 MPI hostfile 并计算总 rank 数；必须指定实际 `--directory`，以及 `--source` 或 `--inherit-env`。`--execute` 才运行，默认小流量，1G 必须显式选择。`scripts/preflight.py pairs` 每次隔离一对选定节点，按各自卡列表做笛卡尔积；节点身份、卡数都来自本次配置，不把多 rank collective 冒充独立卡对覆盖。
 
-`scripts/parallelism_advisor.py`：纯离线并行策略分析器。严格读取脱敏 sidecar，核对集群/P/D 卡预算，枚举显式允许的 DP×TP×PP，按声明过滤 TP 超过单机容量、P/D TP 比例和 Decode PP 等约束，再在给定并发负载下按 TTFT、TPOT、output/request throughput、goodput 或 balanced 目标输出可解释的理论候选。`TP <= 单机卡数` 只是 placement 的必要条件，工具不证明实例已正确装箱。它不含 SSH、网络或子进程执行能力，不读取服务凭据，不预测真实数值，也不直接修改 `service-workflow` 配置。样例见 `examples/parallelism-advisor.json`。
+`scripts/parallelism_advisor.py`：纯离线并行策略分析器。严格读取脱敏 sidecar，核对集群/P/D 卡预算，枚举显式允许的 DP×TP×PP，按声明过滤 TP 超过单机容量、P/D TP 比例和 Decode PP 等约束，再在给定并发负载下按 TTFT、TPOT、output/request throughput、goodput 或 balanced 目标输出可解释的理论候选。`TP <= 单机卡数` 只是 placement 的必要条件，工具不证明实例已正确装箱，也不会从权重或日志自动计算 `minimum_replica_devices`。该值只是角色级粗粒度下界，应由容量硬下界、保守静态估算与同口径历史证据支撑；当前 schema 没有合法 `(TP, PP)` pair 白名单，候选级证据发现某个组合不成立时，需由人工/agent 外部预筛，不能声称 advisor 已自动排除。工具不含 SSH、网络或子进程执行能力，不读取服务凭据，不预测真实数值，也不直接修改 `service-workflow` 配置。样例见 `examples/parallelism-advisor.json`。
 
 `scripts/service_workflow.py`：配置驱动的长时服务生命周期、测试和有界寻优工具，与 `preflight.py` 分离。`validate/plan` 只处理控制端数据；会执行远端健康命令的 `status` 以及 `launch/test/tune/stop` 均需要 `--execute` 与当前 `plan_sha256`，stop/tune 还需确认 deployment 名称。严格拒绝秘密字段、未知字段、shell 字符串和模糊杀进程；执行前复核远端 artifacts，测试前后复核全部服务健康与 run ID，并对 Windows 控制端命令长度预先失败关闭。示例见 `examples/service-workflow.json`，详细限制见 [工作流指引](references/service-lifecycle.md)。
 
