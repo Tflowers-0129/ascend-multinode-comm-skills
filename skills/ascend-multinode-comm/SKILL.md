@@ -1,6 +1,6 @@
 ---
 name: ascend-multinode-comm
-description: 面向 Ascend A3/A5 与 vLLM-Ascend 的单机/多机通信预检与现场排障，含混部、多 DP 和 PD 分离示例。用户提供服务器连接信息、容器、工作目录和远端部署脚本后，按实时平台/版本及 HCCS/RoCE/UB 路径检查 TCPStore/Gloo/HCCL、MC2 与 PD/KV 通信；建链失败时结合日志、实际进程和网络设备状态定位原因。预检与排障并列，支持辅助脚本分析与成功案例提炼；脚本默认在服务器，不要求上传，不绑定特定 agent。
+description: 面向 Ascend A2/A3/A5 与 vLLM-Ascend 的单机/多机通信预检、现场排障，以及在用户明确配置与执行授权下的服务拉起、有限参数寻优和 E2E 验收。按实时平台/版本及 HCCS/RoCE/UB 路径检查 TCPStore/Gloo/HCCL、MC2 与 PD/KV 通信；建链失败时结合日志、实际进程和网络设备状态定位原因。支持混部、多 DP、PD 分离、辅助脚本分析和成功案例提炼；远端脚本不要求上传，不绑定特定 agent。
 ---
 
 # 昇腾单机/多机通信预检与现场排障
@@ -22,6 +22,7 @@ description: 面向 Ascend A3/A5 与 vLLM-Ascend 的单机/多机通信预检与
 | 先找官网部署脚本、建立 A3/A5 参考基线 | 读 [官方配方索引](references/official-deployment-recipes.md)，按平台/模式/版本选择官网代码块和固定源码；无需先索要现场成功脚本，不执行部署 |
 | 给出单机混部/PD 分离、双机或多机多 DP/PD 分离示例 | 读 [六类场景示例](references/scenario-examples.md)，提供对应拓扑、官方脚本入口及现场请求；区分官方配方、扩容算例和工具限制，不执行部署 |
 | 给出远端已成功部署的脚本，希望提炼检查规则 | 按 [成功样本指引](references/known-good-deployments.md) 只读提取有版本和验收证据的规则，不重跑服务，不把原始内容推送仓库 |
+| 用户提供节点、容器、P/D 配置和已有启动/测试脚本，要求拉起、寻优或自动测试 | 先读 [PD 运维规则](references/vllm-pd-operations.md)，再按 [配置驱动工作流](references/service-lifecycle.md) 生成严格本地配置与 plan；服务变更、压测和寻优必须显式执行并匹配 plan SHA，只管理本工具拥有的进程 |
 
 用户在服务器场景中“提供脚本”即提供远端路径；不要要求先下载、上传、复制到本地，或先制作审计 manifest。若给出容器，工作目录默认按该容器内路径理解，脚本相对路径相对于该目录；核查实际存在性，必要时澄清宿主/容器边界，不擅自换一个同名文件。
 
@@ -47,6 +48,17 @@ description: 面向 Ascend A3/A5 与 vLLM-Ascend 的单机/多机通信预检与
 3. 按 [A3/A5 平台分支](references/platform-a3-a5.md) 核实型号与版本支持，将脚本声明与实际进程参数/环境、容器挂载、网卡/IP、路由、DNS、监听归属、设备/版本状态交叉验证。必须在故障服务的目标 namespace 中查；新 docker exec 的环境不自动等于运行中 worker 的环境。
 4. 根据假设做最小验证，不机械跑完整预检。只读状态及有界解析查询按需执行；新增监听器、TCPStore/Gloo/HCCL/MC2 测试进程或占卡打流前，明确空闲资源和影响范围并取得对应授权。用 [拓扑与配置文件](references/topology-and-files.md)、[HCCL 检测](references/hccl-testing.md) 和 [MC2 算子检测](references/mc2-testing.md) 选择验证路径；保留测试环境与故障 worker 的差异。未被验证的层继续标注未知。
 5. 给出已确认原因/高概率假设、具体远端文件行号或日志/运行时证据、影响节点和最小修复建议；证据不足就继续范围内的检查，不以本地静态报告或通用检查清单结束。只有缺访问、缺关键事实或后续动作需新授权时停下并指出确切缺口。修改、重启与复测按用户后续授权进行。
+
+## 配置驱动的服务拉起、寻优与测试
+
+仅当用户明确要求启动、停止、测试或调优时进入本流程；“检查/排障”本身不授权修改服务。完整配置、命令和状态边界见 [配置驱动工作流](references/service-lifecycle.md)，本次 A2/GLM 类问题形成的条件化经验见 [PD 运维规则](references/vllm-pd-operations.md)。
+
+1. 从现场已有脚本和只读状态建立 `service-workflow` 本地配置。明确 P/D 的 DP、TP、PP、每个 DP instance 的节点/设备、完整版本指纹、engine 参数、prefix cache/池化/fused MC2/multistream、Proxy、健康与测试判据。A2 deployment profile 不等于现有 preflight 平台 gate 已认证；按工具实际支持范围保留 UNVERIFIED。
+2. 原脚本不直接改写；需要调整时先复制，保持用户已有纯 Bash 格式，只暴露必要 argv/env 参数。入口以前台进程运行并绑定远端 SHA256；后台化且无法返回结构化所有权证据的脚本只能 plan/manual，不能自动循环重启。
+3. 先 `validate`、再 `plan`，核对计划中的精确节点、容器、卡、依赖 wave、artifacts、测试和候选。若配置要求通信门禁，绑定同一通信域的新鲜 preflight 报告。计划同时绑定配置、证据和工作流实现；配置、脚本、报告或实现变化后 plan SHA 作废。
+4. `status/launch/test/tune/stop` 只在用户授权动作范围内使用显式 `--execute` 和匹配的 `--approve`；`status` 也会执行远端健康命令。启动同一 wave 时先让全部 supervisor 发布所有权并提交激活令牌，再并发等待健康。健康端口只有同时匹配本工具所有权与当前 service/profile 规格哈希才算已拉起；不停止未归属进程，不用进程名/端口模糊清理，不创建/删除容器或重置 NPU。失败或中断回滚只处理本轮随机 run ID，并保留日志证据。
+5. 测试同时核对退出码、全部计划 case、失败请求数、致命日志模式、服务日志、压测后 P/D/Proxy 健康及 run ID 前后一致；没有 `set -e` 的脚本不能只看最终退出码。精度需要独立可执行判据，请求成功不等于精度通过。
+6. 寻优从已通过 baseline 开始，按有限候选串行运行，尊重 pinned 值。OOM 可将该候选判为无效；device page fault、EngineDead、KV/ReadError 等致命模式停止本轮寻优。默认只推荐 best，不自动上线；推广后重新 plan、启动和全量验收。
 
 ## 辅助：脚本语义与静态检查
 
@@ -76,6 +88,8 @@ python scripts/preflight.py gate --report reports/check.json --scope primitives
 ```
 
 `scripts/hccl_bench.py`：从重复的 `--host` 参数生成 MPI hostfile 并计算总 rank 数；必须指定实际 `--directory`，以及 `--source` 或 `--inherit-env`。`--execute` 才运行，默认小流量，1G 必须显式选择。`scripts/preflight.py pairs` 每次隔离一对选定节点，按各自卡列表做笛卡尔积；节点身份、卡数都来自本次配置，不把多 rank collective 冒充独立卡对覆盖。
+
+`scripts/service_workflow.py`：配置驱动的长时服务生命周期、测试和有界寻优工具，与 `preflight.py` 分离。`validate/plan` 只处理控制端数据；会执行远端健康命令的 `status` 以及 `launch/test/tune/stop` 均需要 `--execute` 与当前 `plan_sha256`，stop/tune 还需确认 deployment 名称。严格拒绝秘密字段、未知字段、shell 字符串和模糊杀进程；执行前复核远端 artifacts，测试前后复核全部服务健康与 run ID，并对 Windows 控制端命令长度预先失败关闭。示例见 `examples/service-workflow.json`，详细限制见 [工作流指引](references/service-lifecycle.md)。
 
 `preflight.py check` 在显式配置 `require_mc2: true` 和 `mc2_cases` 且平台身份核实时执行算子级测试，逐项写入 `mc2/<case-name>`；`gate --scope mc2` 要求平台身份、基础通信与全部显式 case 通过。配置模板见 `examples/mc2-cases.json`，须合入实际 cluster 并填写已核实的版本支持来源。
 

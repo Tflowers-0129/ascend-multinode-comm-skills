@@ -1,8 +1,8 @@
 # Ascend 单机/多机通信预检与现场排障 Skills
 
-面向 Ascend A3 / A5 与 vLLM-Ascend，提供两个并列场景：服务启动前的通信预检，以及建链失败后的现场排障。用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，由具备相应访问能力的 agent 直接连接现场。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
+面向 Ascend A2 / A3 / A5 与 vLLM-Ascend，提供通信预检、建链失败现场排障，以及经明确授权的配置驱动服务拉起、有限寻优和 E2E 测试。用户提供一组服务器连接信息、各节点容器、工作目录和远端部署脚本，由具备相应访问能力的 agent 直接连接现场。这里“提供脚本”指提供服务器上的路径，不要求上传到本地，也不限定服务器数量。
 
-预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。两者共用 DNS/TCPStore/Gloo/HCCL、逐卡检测、官方 hccl_test 配方、MC2 算子级测试、KV 验收接口和辅助脚本分析。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
+预检从计划部署配置与现场环境出发，按通信阶段验证；排障从现有日志、实际 worker、容器和网络/设备状态定位失败阶段，再定向验证。生命周期工作流从严格 JSON、计划哈希和远端脚本哈希出发，只管理自身 supervisor，按依赖启动、测试并串行评估有限候选。技能指引不绑定某个 agent 产品，命令行工具也可独立使用。
 
 这是可运行的初版工具与中文技能库，不是“检测通过就保证模型必定启动”的承诺。开发机为 Windows、无本地 NPU；本地测试与有限的远端 Host/HCCS 小包、双机官方 HCCL Broadcast 证据见 [验证记录](docs/validation.md)。完整 A3/A5 兼容性、Gloo、HCCL collective/卡对矩阵、MC2、KV 数据通路仍需现场验收。
 
@@ -26,6 +26,8 @@
 | 先从 vLLM-Ascend 官网查 A3/A5 部署脚本 | [官方配方、固定源码与审计重点](skills/ascend-multinode-comm/references/official-deployment-recipes.md) |
 | 单机混部/PD 分离、双机/多机多 DP/PD 分离怎么检查 | [六类场景、并行配置与现场请求示例](skills/ascend-multinode-comm/references/scenario-examples.md) |
 | 提供远端成功部署脚本，提炼平台/版本经验 | [成功样本的选择、读取和归档](skills/ascend-multinode-comm/references/known-good-deployments.md) |
+| 根据用户配置拉起 P/D/Proxy、寻优并自动测试 | [配置驱动工作流](skills/ascend-multinode-comm/references/service-lifecycle.md) |
+| 查看本次 PD/OOM/版本/特性/测试问题总结 | [vLLM-Ascend PD 运维规则](skills/ascend-multinode-comm/references/vllm-pd-operations.md) |
 
 ## 快速使用
 
@@ -44,6 +46,8 @@ MPICH/Hydra + 官方 HCCL Test 的标准打流过程已总结到 [HCCL 检测指
 只检查宿主机网络时不必提供容器/部署脚本。IP、账号和认证方式齐全即可开始；不进入容器、不把 SSH 端口可达当成服务器之间全部通信已通过。
 
 新增独立 `fabric_probe.py`：自动发现已知格式的设备映射、采集 HCCS/vNIC/Pod 与 RoCE/UB 证据；针对明确设备对执行有界 HCCS 小包，识别跨域重复地址和“rc=0 但丢包”的失败。支持 1～64 节点取证和显式 SSH 密钥路径，默认只采集/计划，`--execute` 才发小包。详细用法见 [宿主机设备检测](skills/ascend-multinode-comm/references/host-fabric-detection.md)。不提供通用 UBoE 自动判型，不把 HCCS_SW 或 fullmesh 算法当成物理全连接证明。
+
+新增独立 `service_workflow.py`：读取严格配置后生成可人工审阅的 plan；会执行远端探针或改变状态的 `status/launch/test/tune/stop` 需要显式 `--execute` 与匹配的 `plan_sha256`。计划同时绑定配置、通信证据和工作流实现。它核对 P/D 的 DP×TP×PP 和实例设备映射、完整软件指纹、特性约束、真实入口 SHA256、完整 case 计数、失败请求数、服务日志与测试后健康；调优先跑 baseline，最多 32 个显式候选，默认只推荐 best。同一依赖 wave 使用“supervisor 先发布所有权、全部激活后再并发等健康”的两阶段启动；服务以完整规格和 128-bit run ID 精确回滚，测试前后拒绝 run ID 漂移。控制端在远端动作前预留且保护报告路径，验收正则和远端 transport 都有可终止边界，子集测试只记为 `PARTIAL`。工具不创建容器、不清理其他人的进程，也不接受明文凭据、shell 字符串或模糊杀进程。示例见 [`service-workflow.json`](skills/ascend-multinode-comm/examples/service-workflow.json)，完整流程见 [工作流指引](skills/ascend-multinode-comm/references/service-lifecycle.md)。
 
 ### 场景一：服务启动前通信预检
 

@@ -136,3 +136,25 @@ preflight.py 增加可选 platform 声明、实时型号保守匹配、节点/�
 MC2 指南新增 V2/V4 分层说明，补充固定提交的 op-plugin/kernel/tiling 实现链接和 master 文档导航：vLLM-Ascend 调用 torch_npu V2 接口，op-plugin 可从 V2 适配入口选择 `aclnnMoeDistributeDispatchV4`，CANN 的 V2 算子目录包含 V4 host API 与 arch35 FullMesh kernel/tiling 实现。`fullmesh_v2` 是 `commAlg` 模板选项，不等于 aclnn V4。公开源码存在只证明对应版本的实现与支持声明，现场仍需核对配套 tag、安装二进制、参数约束和实时链路。
 
 本次只更新技能文档，不重连历史 NPU 或重跑模型。Windows 使用随附 Python 运行 129 项 unittest，其中 128 项通过、1 项 Linux SIGALRM 测试按预期跳过；`git diff --check` 无空白错误。skill-creator 的 `quick_validate.py` 因本地运行时没有 PyYAML，改在已有 PyYAML 的授权 Linux 临时仓库副本上执行并通过；没有为校验安装系统依赖。
+## 新增：配置驱动的服务生命周期、寻优与 E2E 测试
+
+2026-09-17 至 2026-09-18 新增独立 `service_workflow.py`、脱敏 A2 PD 示例、PD 运维经验和工作流指引。长时服务没有塞入 `preflight.py`：通信报告可作为有时效的门禁证据，服务 supervisor、测试日志和 trial 另行管理。
+
+新增 82 项服务工作流回归；合并远端新增的 3 项 HCCL 打流回归后，总计 214 项 unittest。Windows / Python 3.12.14 上 211 项通过、3 项跳过（原有 1 项 Linux SIGALRM 总预算，以及 2 项 Linux `flock`/进程组集成）。新增覆盖：
+
+- 配置 unknown-key fail-closed，明文密码/API key/HF token/AWS secret/credentials/私钥正文/带密码 URI、shell 内联、解释器绕过、sshpass、pkill/killall 拒绝；
+- A2 deployment profile、P/D 的 DP×TP×PP、dp_rank、实例设备映射和 P/D 设备重叠检查；
+- fused MC2/multistream 显式冲突、KV Pool 的 HDK 最低版本、`max_num_batched_tokens < max_model_len` 的合法性；
+- baseline 优先、pinned 参数保护、有限候选、依赖环、计划哈希稳定性/变更检测；
+- supervisor/stopper 源码语法，原子 PID 状态、生命周期锁、boot ID、128-bit run ID 和完整 service/workflow 规格绑定；supervisor 严格绑定 cmdline，child 前台 `exec` 后按 PID/starttime/PGID 继续识别，不自动模糊杀进程；
+- 两阶段 wave 启动（先发布所有权、全部激活、再并发等健康），丢失 detach/activation ACK 的精确回滚，foreign run 所有权立即冲突，以及同 wave 先并发发送 stop 再做健康证据；
+- nonce 绑定的远端结果协议、共享 readiness 截止时间、控制端中断回收 SSH transport、传输失败不冒充 DOWN、入口 artifact 双重绑定，以及停止后再次扫描服务日志；
+- curl 只读健康参数、query/fragment 与敏感 header 拒绝，精确 Python basename、loader/解释器/shell 启动 env 拒绝，模板字段白名单、日志/PID/artifact 路径冲突；
+- 报告及 lock/temp/error/probe 与 config/preflight/identity 输入隔离，符号链接/已有硬链接保护，Windows 32K 命令行预检，本地正则 operations 走文件且在可终止子进程内共享预算；
+- 依赖 wave 启动、九组正式 case/十八条 Failed Requests 计数、非零失败拒绝、输出截断/NaN/Inf/缺失指标拒绝、测试前后 run ID 不漂移、子集测试标记 PARTIAL、测试后健康和只从通过 trial 选 best。
+
+另以公开示例实际运行了 `validate` 与 `plan`；计划为只读，未连接示例地址。仓库全量测试没有启动 Docker、SSH 服务、NPU 模型或 ais-bench，fake executor 只验证控制面状态机与判定逻辑，不能称为 Linux supervisor、真实容器、A2/A3/A5 或模型性能通过。
+
+新的 supervisor 仅支持不自行后台化、不 double-fork/daemonize 且不逃离记录进程组的前台入口，并在目标 Linux 环境依赖 Python 3、`fcntl` 与 `/proc`。远端 artifacts 运行前校验 SHA256；同一 UID 在最后校验与按路径执行之间恶意替换仍超出本工具边界，生产发布目录必须只读/不可变。stop 只对 deployment/service、boot ID、starttime、进程组和可选回滚 run ID 匹配的 supervisor/遗留 child 发送 SIGTERM，宽限期后不自动模糊强杀。控制面不依赖业务 workdir，但尚未在真实 SSH/Docker 环境验证目录卸载场景。未做真实 SSH 中断、容器重启、PID 复用、不可中断 NPU worker 或多小时网络抖动的端到端故障注入；两个 Linux supervisor/worker 集成用例已编写但本机未运行。
+
+E2E parser 的本地合成样本覆盖本次九组正式测试与九组 Prefix 探针口径，但没有把历史现场日志、IP、账号、路径、密码或密钥加入仓库。`/metrics` 404 仅在对应指标探针明确可选时可记为 UNVERIFIED；实际请求、case 数、失败请求、致命日志和后置健康仍必须独立通过。

@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "deployment": "glm-pd-example",
+  "example": true,
+  "nodes": [
+    {
+      "name": "prefill-a",
+      "ssh": "root@prefill-a.example.invalid",
+      "identity_file": "/path/to/task-specific-key",
+      "container": "vllm-existing-container",
+      "workdir": "/opt/deploy",
+      "python": "python3",
+      "platform": "A2",
+      "devices": [0, 1]
+    },
+    {
+      "name": "prefill-b",
+      "ssh": "root@prefill-b.example.invalid",
+      "identity_file": "/path/to/task-specific-key",
+      "container": "vllm-existing-container",
+      "workdir": "/opt/deploy",
+      "python": "python3",
+      "platform": "A2",
+      "devices": [0, 1]
+    },
+    {
+      "name": "decode-a",
+      "ssh": "root@decode-a.example.invalid",
+      "identity_file": "/path/to/task-specific-key",
+      "container": "vllm-existing-container",
+      "workdir": "/opt/deploy",
+      "python": "python3",
+      "platform": "A2",
+      "devices": [0, 1]
+    },
+    {
+      "name": "decode-b",
+      "ssh": "root@decode-b.example.invalid",
+      "identity_file": "/path/to/task-specific-key",
+      "container": "vllm-existing-container",
+      "workdir": "/opt/deploy",
+      "python": "python3",
+      "platform": "A2",
+      "devices": [0, 1]
+    }
+  ],
+  "profile": {
+    "platform": "A2",
+    "software": {
+      "vllm": "confirmed-version",
+      "vllm_ascend": "confirmed-version",
+      "torch": "confirmed-version",
+      "torch_npu": "confirmed-version",
+      "cann": "confirmed-version",
+      "hdk": "26.1",
+      "driver": "confirmed-version",
+      "image_digest": "sha256:confirmed-image-digest"
+    },
+    "model": {
+      "path": "/models/GLM-5.3",
+      "tokenizer_path": "/models/GLM-5.3",
+      "quantization": "w8a8c8",
+      "max_model_len": 131072
+    },
+    "roles": {
+      "prefill": {
+        "dp": 1,
+        "tp": 2,
+        "pp": 2,
+        "ep": 1,
+        "instances": [
+          {
+            "name": "prefill-dp0",
+            "dp_rank": 0,
+            "participants": [
+              {"node": "prefill-a", "devices": [0, 1]},
+              {"node": "prefill-b", "devices": [0, 1]}
+            ]
+          }
+        ],
+        "engine": {
+          "max_num_batched_tokens": 16384,
+          "max_num_seqs": 32,
+          "gpu_memory_utilization": 0.92
+        },
+        "features": {
+          "prefix_cache": true,
+          "kv_pool": false,
+          "fused_mc2": true,
+          "multistream": false
+        }
+      },
+      "decode": {
+        "dp": 2,
+        "tp": 2,
+        "pp": 1,
+        "ep": 1,
+        "instances": [
+          {
+            "name": "decode-dp0",
+            "dp_rank": 0,
+            "participants": [{"node": "decode-a", "devices": [0, 1]}]
+          },
+          {
+            "name": "decode-dp1",
+            "dp_rank": 1,
+            "participants": [{"node": "decode-b", "devices": [0, 1]}]
+          }
+        ],
+        "engine": {
+          "max_num_batched_tokens": 16384,
+          "max_num_seqs": 64,
+          "gpu_memory_utilization": 0.92
+        },
+        "features": {
+          "prefix_cache": true,
+          "kv_pool": false,
+          "fused_mc2": false,
+          "multistream": true
+        }
+      }
+    },
+    "compatibility": {
+      "fused_mc2_multistream_conflict": true,
+      "kv_pool_min_hdk": "26.1"
+    }
+  },
+  "services": [
+    {
+      "name": "decode-a",
+      "node": "decode-a",
+      "role": "decode",
+      "depends_on": [],
+      "argv": ["bash", "/opt/deploy/start_decode_a.sh"],
+      "env": {},
+      "log_path": "/opt/deploy/logs/decode_a_{{trial}}.log",
+      "pid_file": "/opt/deploy/run/decode_a.pid.json",
+      "ready_timeout_s": 1800,
+      "stop_timeout_s": 120,
+      "backup_existing_log": true,
+      "error_patterns": ["Traceback", "OutOfMemory|out of memory", "device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "fatal_patterns": ["device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "health": {
+        "argv": ["/usr/bin/curl", "-q", "-fsS", "http://127.0.0.1:8900/health"],
+        "artifacts": [{"path": "/usr/bin/curl", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}],
+        "timeout_s": 5,
+        "expected_exit_code": 0,
+        "down_exit_codes": [7]
+      },
+      "artifacts": [
+        {"path": "/opt/deploy/start_decode_a.sh", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+      ]
+    },
+    {
+      "name": "decode-b",
+      "node": "decode-b",
+      "role": "decode",
+      "depends_on": [],
+      "argv": ["bash", "/opt/deploy/start_decode_b.sh"],
+      "env": {},
+      "log_path": "/opt/deploy/logs/decode_b_{{trial}}.log",
+      "pid_file": "/opt/deploy/run/decode_b.pid.json",
+      "ready_timeout_s": 1800,
+      "stop_timeout_s": 120,
+      "backup_existing_log": true,
+      "error_patterns": ["Traceback", "OutOfMemory|out of memory", "device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "fatal_patterns": ["device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "health": {
+        "argv": ["/usr/bin/curl", "-q", "-fsS", "http://127.0.0.1:8900/health"],
+        "artifacts": [{"path": "/usr/bin/curl", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}],
+        "timeout_s": 5,
+        "expected_exit_code": 0,
+        "down_exit_codes": [7]
+      },
+      "artifacts": [
+        {"path": "/opt/deploy/start_decode_b.sh", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+      ]
+    },
+    {
+      "name": "prefill-a",
+      "node": "prefill-a",
+      "role": "prefill",
+      "depends_on": ["decode-a", "decode-b"],
+      "argv": ["bash", "/opt/deploy/start_prefill_a.sh"],
+      "env": {"MAX_NUM_BATCHED_TOKENS": "{{max_num_batched_tokens}}", "GPU_MEMORY_UTILIZATION": "0.92"},
+      "log_path": "/opt/deploy/logs/prefill_a_{{trial}}.log",
+      "pid_file": "/opt/deploy/run/prefill_a.pid.json",
+      "ready_timeout_s": 1800,
+      "stop_timeout_s": 120,
+      "backup_existing_log": true,
+      "error_patterns": ["Traceback", "OutOfMemory|out of memory", "device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "fatal_patterns": ["device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "health": {
+        "argv": ["/usr/bin/curl", "-q", "-fsS", "http://127.0.0.1:8078/health"],
+        "artifacts": [{"path": "/usr/bin/curl", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}],
+        "timeout_s": 5,
+        "expected_exit_code": 0,
+        "down_exit_codes": [7]
+      },
+      "artifacts": [
+        {"path": "/opt/deploy/start_prefill_a.sh", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+      ]
+    },
+    {
+      "name": "prefill-b",
+      "node": "prefill-b",
+      "role": "prefill",
+      "depends_on": ["decode-a", "decode-b"],
+      "argv": ["bash", "/opt/deploy/start_prefill_b.sh"],
+      "env": {"MAX_NUM_BATCHED_TOKENS": "{{max_num_batched_tokens}}", "GPU_MEMORY_UTILIZATION": "0.92"},
+      "log_path": "/opt/deploy/logs/prefill_b_{{trial}}.log",
+      "pid_file": "/opt/deploy/run/prefill_b.pid.json",
+      "ready_timeout_s": 1800,
+      "stop_timeout_s": 120,
+      "backup_existing_log": true,
+      "error_patterns": ["Traceback", "OutOfMemory|out of memory", "device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "fatal_patterns": ["device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "health": {
+        "argv": ["/usr/bin/curl", "-q", "-fsS", "http://127.0.0.1:8078/health"],
+        "artifacts": [{"path": "/usr/bin/curl", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}],
+        "timeout_s": 5,
+        "expected_exit_code": 0,
+        "down_exit_codes": [7]
+      },
+      "artifacts": [
+        {"path": "/opt/deploy/start_prefill_b.sh", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+      ]
+    },
+    {
+      "name": "proxy",
+      "node": "prefill-a",
+      "role": "proxy",
+      "depends_on": ["prefill-a", "prefill-b"],
+      "argv": ["bash", "/opt/deploy/start_proxy.sh"],
+      "env": {},
+      "log_path": "/opt/deploy/logs/proxy_{{trial}}.log",
+      "pid_file": "/opt/deploy/run/proxy.pid.json",
+      "ready_timeout_s": 300,
+      "stop_timeout_s": 60,
+      "backup_existing_log": true,
+      "error_patterns": ["Traceback", "OutOfMemory|out of memory", "device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "fatal_patterns": ["device page fault", "EngineDeadError", "ReadError|KV load failure"],
+      "health": {
+        "argv": ["/usr/bin/curl", "-q", "-fsS", "http://127.0.0.1:8000/healthcheck"],
+        "artifacts": [{"path": "/usr/bin/curl", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}],
+        "timeout_s": 5,
+        "expected_exit_code": 0,
+        "down_exit_codes": [7],
+        "required_regex": "prefill_instances"
+      },
+      "artifacts": [
+        {"path": "/opt/deploy/start_proxy.sh", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "name": "e2e-prefix-matrix",
+      "node": "prefill-a",
+      "workdir": "/opt/aisbench_auto_tools_prefix",
+      "argv": ["bash", "/opt/deploy/test_e2e.sh"],
+      "env": {},
+      "log_path": "/opt/deploy/results/result_e2e_{{trial}}.log",
+      "log_mode": "w",
+      "backup_existing": true,
+      "timeout_s": 7200,
+      "artifacts": [
+        {"path": "/opt/deploy/test_e2e.sh", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+      ],
+      "assertions": {
+        "exit_code": 0,
+        "must_match": ["全量数据集测试完成"],
+        "must_not_match": [
+          "Failed Requests\\s*[|:]\\s*[1-9][0-9]*",
+          "Traceback|EngineDeadError|device page fault|ReadError|KV load failure"
+        ],
+        "counts": [
+          {"pattern": "全量数据集测试完成", "equals": 9},
+          {"pattern": "Failed Requests", "equals": 18}
+        ]
+      },
+      "metrics": {
+        "output_throughput": {
+          "pattern": "Output Token Throughput[^0-9]*([0-9]+(?:\\.[0-9]+)?)",
+          "aggregate": "mean"
+        }
+      }
+    }
+  ],
+  "tuning": {
+    "max_trials": 3,
+    "baseline": {"max_num_batched_tokens": 16384},
+    "pinned": {"gpu_memory_utilization": 0.92},
+    "candidates": [
+      {"max_num_batched_tokens": 16384},
+      {"max_num_batched_tokens": 24576},
+      {"max_num_batched_tokens": 32768}
+    ],
+    "objective": {
+      "test": "e2e-prefix-matrix",
+      "metric": "output_throughput",
+      "direction": "maximize"
+    },
+    "fatal_patterns": [
+      "device page fault",
+      "EngineDeadError",
+      "ReadError",
+      "Failed to receive data",
+      "KV load failure"
+    ]
+  }
+}
