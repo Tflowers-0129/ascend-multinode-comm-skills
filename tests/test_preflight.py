@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import queue
 import shlex
@@ -344,6 +345,21 @@ class BenchTests(unittest.TestCase):
         )
         self.assertEqual(allreduce.returncode, 0, allreduce.stderr)
         self.assertEqual(broadcast.returncode, 2)
+
+    def test_hccl_plan_cli_forces_utf8_under_legacy_code_page(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "cp1252"
+        result = subprocess.run(
+            [sys.executable, b.__file__,
+             "--host", "node-a:1", "--host", "node-b:1",
+             "--inherit-env", "--directory", "/opt/tests", "--mpi", "mpich",
+             "--op", "allreduce"],
+            capture_output=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.decode("utf-8"))
+        self.assertIn("MPI 全体参与", payload["boundary"])
 
 
 if __name__ == "__main__":

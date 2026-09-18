@@ -140,7 +140,7 @@ MC2 指南新增 V2/V4 分层说明，补充固定提交的 op-plugin/kernel/til
 
 2026-09-17 至 2026-09-18 新增独立 `service_workflow.py`、脱敏 A2 PD 示例、PD 运维经验和工作流指引。长时服务没有塞入 `preflight.py`：通信报告可作为有时效的门禁证据，服务 supervisor、测试日志和 trial 另行管理。
 
-新增 82 项服务工作流回归；合并远端新增的 3 项 HCCL 打流回归后，总计 214 项 unittest。Windows / Python 3.12.14 上 211 项通过、3 项跳过（原有 1 项 Linux SIGALRM 总预算，以及 2 项 Linux `flock`/进程组集成）。新增覆盖：
+新增 82 项服务工作流回归；合并远端新增的 3 项 HCCL 打流回归及 1 项 Windows 旧代码页 UTF-8 输出回归后，总计 215 项 unittest。Windows / Python 3.12.14 上 212 项通过、3 项跳过（原有 1 项 Linux SIGALRM 总预算，以及 2 项 Linux `flock`/进程组集成）。新增覆盖：
 
 - 配置 unknown-key fail-closed，明文密码/API key/HF token/AWS secret/credentials/私钥正文/带密码 URI、shell 内联、解释器绕过、sshpass、pkill/killall 拒绝；
 - A2 deployment profile、P/D 的 DP×TP×PP、dp_rank、实例设备映射和 P/D 设备重叠检查；
